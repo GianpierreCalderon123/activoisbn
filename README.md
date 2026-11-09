@@ -1,25 +1,23 @@
-# InventarioFW PWA — paquete para GitHub + Vercel
+# InventarioFW PWA – revisión de sincronización
 
-## Despliegue
-1. Crear repositorio privado en GitHub y subir **el contenido de esta carpeta a la raíz** del repositorio.
-2. En Vercel: Add New > Project > Import Git Repository.
-3. Framework Preset: Other. Root Directory: `./`. No build command (sitio estático con funciones Node).
-4. Configurar variable opcional `INVENTARIO_ASMX_URL=https://inventariofw.somee.com/paginas.asmx`.
-5. Deploy. Abrir la URL HTTPS en Safari > Compartir > Añadir a pantalla de inicio.
+## Cambios
+- Se ocultaron los campos adicionales no necesarios (tipo de activo, código 2020, material, etc.) y se separaron Estado y Fotografías en sus pestañas respectivas.
+- Se corrigió el proxy ASMX para enviar datos form-urlencoded sin convertirlos a JSON.
+- Se agregó proxy multipart para fotografías, con compresión en navegador.
+- Se mantiene sincronización exclusivamente manual.
 
-## Estado y limitaciones IMPORTANTES
-- Se incluyó proxy serverless para métodos ASMX conocidos. **No se ha validado contra la API real**, sus contratos ni los permisos de Vercel.
-- `api/upload-image.js` devuelve deliberadamente HTTP 501: **la subida de fotografías NO está implementada**, ya que el backend anterior usaba `http://190.116.22.130:2384/...` y no se ha comprobado su accesibilidad/seguridad, ni los límites de tamaño en Vercel. Los registros con fotos quedarán pendientes. No utilizar en producción.
-- `InsUpdtTomaActivoIsnV2` aún necesita validación estricta de confirmación remota e idempotencia antes de operar con datos reales.
-- La PWA existente no replica todos los diseños y reglas de Android. Es un punto de partida, no migración final certificada.
-- **Seguridad:** las rutas proxy actuales no autentican al cliente por sí mismas. Antes de exponer datos, implementar autenticación y autorización del lado del servidor, rate limiting y restringir origen/uso. El login de la UI no protege el proxy. No publicar datos reales hasta corregir esto.
-- En iOS el almacenamiento IndexedDB puede ser eliminado. No sustituye un respaldo permanente.
-- El plan Hobby de Vercel puede no ser adecuado para uso comercial. Consultar las condiciones del plan.
-- La sincronización es manual. La app requiere primera carga con internet y HTTPS para instalarse.
+## Configuración obligatoria en Vercel
+- `INVENTARIO_ASMX_URL=https://inventariofw.somee.com/paginas.asmx`
+- `INVENTARIO_IMAGE_URL=https://TU-SERVIDOR-SEGURO/ApiImagenesApp/Image/UploadImage`
 
-## Archivos
-- `index.html`, `app.js`, `styles.css`, `sw.js`, `manifest.webmanifest`: PWA web.
-- `config.js`: endpoints relativos de Vercel.
-- `api/asmx.js`: proxy de métodos ASMX con lista permitida.
-- `api/upload-image.js`: endpoint bloqueado de forma segura hasta completar integración.
-- `vercel.json`: configuración de funciones y cabeceras.
+**Bloqueante:** La aplicación Android usa `http://190.116.22.130:2384/ApiImagenesApp/Image/UploadImage`. No es HTTPS y no hay prueba de que el servicio esté accesible por HTTPS. Para fotos hace falta publicar ese endpoint mediante HTTPS (dominio/proxy con certificado válido) y establecer la variable anterior. No se debe asumir que Vercel puede acceder a la IP/puerto ni publicar un proxy inseguro.
+
+## Validación pendiente
+- Comprobar contrato exacto de respuesta de `InsUpdtTomaActivoIsnV2` con una toma de prueba y revisar que SQL Server realmente la recibió. Actualmente la respuesta exitosa HTTP no demuestra por sí sola que la base de datos confirmó el guardado.
+- Probar subida de foto 1, 2 y 3, y nombres esperados por servidor.
+- Comprobar equivalencia exacta de los campos ocultos con la última versión de Android.
+- Endurecer autenticación/autorización del proxy antes de producción; ahora los endpoints son públicos.
+- No utilizar inventarios reales hasta finalizar estas pruebas.
+
+## Publicación
+Subir archivos a raíz del repositorio GitHub; en Vercel seleccionar Framework Other, configurar variables de entorno e instalar dependencias con npm. El plan gratuito de Vercel puede no ser adecuado para uso empresarial.
