@@ -9,3 +9,16 @@
 .picker-result{display:block;text-align:left;background:#eaf2fb;color:#173b62;margin:0;white-space:normal;overflow-wrap:anywhere}
 .picker-button{background:#496982}
 [data-group][hidden],[data-photo-group][hidden],[data-state-group][hidden]{display:none!important}
+
+/* iPhone PWA layout: avoid scaled-down/overflowing content */
+html{width:100%;-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{min-width:0;width:100%;overflow-x:hidden}
+header{width:100%;gap:12px;padding-top:max(16px,env(safe-area-inset-top));min-width:0}
+header h1{min-width:0;overflow-wrap:anywhere}
+main{width:100%;max-width:780px;min-width:0}
+#app,nav,.panel{min-width:0;max-width:100%}
+nav{gap:6px;align-items:stretch}
+nav button{margin:0;flex:1 1 auto;min-width:0;white-space:normal}
+.panel button{max-width:100%;white-space:normal;overflow-wrap:anywhere}
+pre,#log,#correctionLog{max-width:100%;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;overflow-x:auto;font-size:12px;line-height:1.45}
+@media(max-width:520px){header{padding-left:14px;padding-right:14px}main{padding:12px}.panel{padding:16px}nav button{font-size:14px;padding:11px 10px}h1{font-size:21px}}
