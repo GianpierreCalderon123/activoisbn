@@ -13,7 +13,7 @@ module.exports = async function handler(req, res) {
   try {
     const contentType = req.headers['content-type'] || 'application/json; charset=utf-8';
     const payload = contentType.includes('application/x-www-form-urlencoded')
-      ? new URLSearchParams(req.body || {}).toString()
+      ? (typeof req.body === 'string' ? req.body : new URLSearchParams(req.body || {}).toString())
       : JSON.stringify(req.body || {});
     const response = await fetch(upstream + '/' + method, {
       method: 'POST', headers: { 'Content-Type': contentType, 'Accept': 'application/json' },
