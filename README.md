@@ -21,3 +21,12 @@
 
 ## Publicación
 Subir archivos a raíz del repositorio GitHub; en Vercel seleccionar Framework Other, configurar variables de entorno e instalar dependencias con npm. El plan gratuito de Vercel puede no ser adecuado para uso empresarial.
+
+
+## Actualización de formulario y sincronización (rama de revisión)
+- Selectores offline para ubicación, usuario asignado y locador. Al seleccionar ubicación se completan descripción, coordinación, subunidad y unidad orgánica.
+- Se retiran campos extra de asignación y se evita que fotos ocultas bloqueen guardar la toma offline.
+- Las respuestas XML simples de ASMX se procesan al enviar formularios; errores HTTP muestran detalle resumido.
+- Botón de reintento de fotografías. Requiere configurar `INVENTARIO_IMAGE_URL` como endpoint HTTPS accesible en Vercel; no está verificado el envío en producción.
+- Los registros ya guardados en IndexedDB no se borran al actualizar. Si un intento previo recibió una respuesta no JSON, verificar en SQL Server si la toma existe antes de reintentar para evitar duplicados.
+- Estos cambios requieren pruebas reales de punta a punta antes de integrarlos en `main`.
