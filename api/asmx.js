@@ -16,7 +16,7 @@ module.exports = async function handler(req, res) {
       ? (typeof req.body === 'string' ? req.body : new URLSearchParams(req.body || {}).toString())
       : JSON.stringify(req.body || {});
     const response = await fetch(upstream + '/' + method, {
-      method: 'POST', headers: { 'Content-Type': contentType, 'Accept': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': contentType, 'Accept': contentType.includes('application/x-www-form-urlencoded') ? '*/*' : 'application/json' },
       body: payload, signal: AbortSignal.timeout(25000)
     });
     const text = await response.text();
