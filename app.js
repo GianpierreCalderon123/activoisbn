@@ -31,25 +31,74 @@ $('logout').onclick=()=>{currentUser='';$('app').hidden=true;$('login').hidden=f
 function toHex(bytes){return [...new Uint8Array(bytes)].map(x=>x.toString(16).padStart(2,'0')).join('')}
 async function passwordKey(pw,salt){const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(pw),'PBKDF2',false,['deriveBits']);return toHex(await crypto.subtle.deriveBits({name:'PBKDF2',salt:new Uint8Array(salt),iterations:210000,hash:'SHA-256'},key,256))}
 $('enter').onclick=async()=>{const u=$('user').value.trim(),pw=$('pass').value;if(!u||!pw)return alert('Ingrese usuario y contraseña');$('enter').disabled=true;try{let ok=false; if(navigator.onLine){const result=await api('ValidarUsuarioSistema',{usuario:u,clave:pw});if(!result?.Autenticado)throw Error('Usuario o contraseña incorrectos o inactivo');const salt=Array.from(crypto.getRandomValues(new Uint8Array(16)));await put('session',{id:'login',user:u,salt,hash:await passwordKey(pw,salt),validatedAt:Date.now()});ok=true}else{const saved=await get('session','login');if(saved?.user!==u||!saved.hash||!saved.salt)throw Error('Primero debe ingresar con internet en este dispositivo');if(await passwordKey(pw,saved.salt)!==saved.hash)throw Error('Contraseña incorrecta');ok=true}if(ok){currentUser=u;$('pass').value='';show('home')}}catch(e){alert('No se pudo iniciar sesión: '+e.message)}finally{$('enter').disabled=false}};
-// Camera scanner: only fills the selected search box, never submits a toma.
-let scanStream=null,scanFrame=0,scanActive=false;
-function closeScanner(){scanActive=false;if(scanFrame)cancelAnimationFrame(scanFrame);scanFrame=0;if(scanStream){scanStream.getTracks().forEach(t=>t.stop());scanStream=null}const v=$('scanVideo');v.pause();v.srcObject=null;$('scanOverlay').hidden=true}
+// Scan only the chosen search field. ZXing uses its callback-based camera API on iOS Safari.
+let scanStream=null,scanFrame=0,scanActive=false,scanReader=null,scanGeneration=0;
+function closeScanner(){
+ scanGeneration++;scanActive=false;
+ if(scanFrame)cancelAnimationFrame(scanFrame);scanFrame=0;
+ if(scanReader){try{scanReader.reset()}catch(e){}scanReader=null}
+ if(scanStream){scanStream.getTracks().forEach(t=>t.stop());scanStream=null}
+ const video=$('scanVideo');try{video.pause()}catch(e){}
+ if(video.srcObject){try{video.srcObject.getTracks().forEach(t=>t.stop())}catch(e){}}
+ video.srcObject=null;$('scanOverlay').hidden=true;
+}
+function acceptScan(value,target,button){
+ if(!value||!scanActive)return;
+ closeScanner();
+ for(const id of ['search2023','search2025','searchPatrimonial','searchSerie'])$(id).value='';
+ $(target).value=String(value).trim();
+ $('found').textContent='Código escaneado. Pulsa Buscar activo.';
+ $(target).focus();
+}
 $('scanClose').onclick=closeScanner;
 document.addEventListener('visibilitychange',()=>{if(document.hidden)closeScanner()});
 document.querySelectorAll('[data-scan]').forEach(button=>button.onclick=async()=>{
  const target=button.dataset.scan;
- if(!('BarcodeDetector' in window) && !window.ZXing){alert('No se pudo cargar el lector compatible con Safari. Conéctate a internet una vez para cargarlo o escribe el código manualmente.');return}
- closeScanner();$('scanOverlay').hidden=false;$('scanStatus').textContent='Abriendo cámara...';
+ if(!navigator.mediaDevices?.getUserMedia){alert('La cámara no está disponible en este navegador.');return}
+ if(!('BarcodeDetector' in window)&&!window.ZXing){alert('El lector no se cargó. Conéctate a internet y vuelve a abrir InventarioFW.');return}
+ closeScanner();const generation=scanGeneration;
+ $('scanOverlay').hidden=false;$('scanStatus').textContent='Abriendo cámara...';
  try{
-  let detector,scanWithZXing=false;
-  if('BarcodeDetector' in window){const formats=await BarcodeDetector.getSupportedFormats();const preferred=['qr_code','code_128','code_39','ean_13','ean_8','itf','codabar','upc_a','upc_e','data_matrix','pdf417'].filter(f=>formats.includes(f));if(!preferred.length)throw Error('No hay formatos de código compatibles.');detector=new BarcodeDetector({formats:preferred})}
-  else {scanWithZXing=true;detector=new ZXing.BrowserMultiFormatReader()}
-  scanStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
-  const video=$('scanVideo');video.srcObject=scanStream;await video.play();scanActive=true;$('scanStatus').textContent='Enfoca el QR o código de barras.';
-  let scanning=false;
-  const tick=async()=>{if(!scanActive)return;if(!scanning&&video.readyState>=2){scanning=true;try{const codes=scanWithZXing?(()=>{try{const result=detector.decodeFromVideoElement(video);return result?[{rawValue:result.getText()}]:[]}catch{return []}})():await detector.detect(video);if(codes.length&&codes[0].rawValue){const value=codes[0].rawValue.trim();closeScanner();for(const id of ['search2023','search2025','searchPatrimonial','searchSerie'])$(id).value='';$(target).value=value;$('found').textContent='Código escaneado en '+button.getAttribute('aria-label')+'. Pulsa Buscar activo.';$(target).focus();return}}catch(e){$('scanStatus').textContent='No se pudo leer el código: '+e.message}finally{scanning=false}}scanFrame=requestAnimationFrame(tick)};
-  scanFrame=requestAnimationFrame(tick);
- }catch(e){closeScanner();alert('No se pudo abrir el escáner: '+e.message)}
+  const video=$('scanVideo');
+  if(!('BarcodeDetector' in window)){
+   // ZXing owns the camera stream and reports decoded values through a callback.
+   const reader=new ZXing.BrowserMultiFormatReader();
+   scanReader=reader;scanActive=true;
+   $('scanStatus').textContent='Apunta la cámara al código. Esperando imagen...';
+   await reader.decodeFromVideoDevice(undefined,video,(result,error)=>{
+    if(generation!==scanGeneration||!scanActive)return;
+    if(result){acceptScan(result.getText(),target,button);return}
+    if(error&&!(error instanceof ZXing.NotFoundException))$('scanStatus').textContent='Enfoca el QR o código de barras.';
+   });
+   if(generation!==scanGeneration){reader.reset();return}
+   $('scanStatus').textContent='Enfoca el QR o código de barras.';
+  }else{
+   const formats=await BarcodeDetector.getSupportedFormats();
+   const preferred=['qr_code','code_128','code_39','ean_13','ean_8','itf','codabar','upc_a','upc_e','data_matrix','pdf417'].filter(f=>formats.includes(f));
+   if(!preferred.length)throw Error('No hay formatos de código compatibles.');
+   const detector=new BarcodeDetector({formats:preferred});
+   const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+   if(generation!==scanGeneration){stream.getTracks().forEach(t=>t.stop());return}
+   scanStream=stream;video.srcObject=stream;await video.play();
+   if(generation!==scanGeneration)return;
+   scanActive=true;$('scanStatus').textContent='Enfoca el QR o código de barras.';
+   let scanning=false;
+   const tick=async()=>{
+    if(!scanActive||generation!==scanGeneration)return;
+    if(!scanning&&video.readyState>=2){
+     scanning=true;
+     try{const codes=await detector.detect(video);if(codes.length&&codes[0].rawValue){acceptScan(codes[0].rawValue,target,button);return}}
+     catch(e){$('scanStatus').textContent='No se pudo leer: '+e.message}
+     finally{scanning=false}
+    }
+    if(scanActive&&generation===scanGeneration)scanFrame=requestAnimationFrame(tick);
+   };
+   scanFrame=requestAnimationFrame(tick);
+  }
+ }catch(e){
+  if(generation!==scanGeneration)return;
+  closeScanner();alert('No se pudo abrir el escáner: '+e.message);
+ }
 });
 const SEARCH_FIELDS={Cod2023:['Cod2023','Codigo2023'],Cod2025:['Cod2025','Codigo2025','Codigo2020','Cod2020'],CodSbn:['CodSbn','CodigoPatrimonial','CodigoSBN'],Serie:['Serie','NumeroSerie','NroSerie','SerieActivo','NumSerie']};
 $('clearSearch').onclick=()=>{for(const id of ['search2023','search2025','searchPatrimonial','searchSerie'])$(id).value='';$('found').textContent=''};
