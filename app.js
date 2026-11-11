@@ -38,17 +38,16 @@ $('scanClose').onclick=closeScanner;
 document.addEventListener('visibilitychange',()=>{if(document.hidden)closeScanner()});
 document.querySelectorAll('[data-scan]').forEach(button=>button.onclick=async()=>{
  const target=button.dataset.scan;
- if(!('BarcodeDetector' in window)){alert('El lector de cámara no está disponible en esta versión de Safari. Puedes escribir el código manualmente.');return}
+ if(!('BarcodeDetector' in window) && !window.ZXing){alert('No se pudo cargar el lector compatible con Safari. Conéctate a internet una vez para cargarlo o escribe el código manualmente.');return}
  closeScanner();$('scanOverlay').hidden=false;$('scanStatus').textContent='Abriendo cámara...';
  try{
-  const formats=await BarcodeDetector.getSupportedFormats();
-  const preferred=['qr_code','code_128','code_39','ean_13','ean_8','itf','codabar','upc_a','upc_e','data_matrix','pdf417'].filter(f=>formats.includes(f));
-  if(!preferred.length)throw Error('Este navegador no admite formatos de códigos.');
-  const detector=new BarcodeDetector({formats:preferred});
+  let detector,scanWithZXing=false;
+  if('BarcodeDetector' in window){const formats=await BarcodeDetector.getSupportedFormats();const preferred=['qr_code','code_128','code_39','ean_13','ean_8','itf','codabar','upc_a','upc_e','data_matrix','pdf417'].filter(f=>formats.includes(f));if(!preferred.length)throw Error('No hay formatos de código compatibles.');detector=new BarcodeDetector({formats:preferred})}
+  else {scanWithZXing=true;detector=new ZXing.BrowserMultiFormatReader()}
   scanStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
   const video=$('scanVideo');video.srcObject=scanStream;await video.play();scanActive=true;$('scanStatus').textContent='Enfoca el QR o código de barras.';
   let scanning=false;
-  const tick=async()=>{if(!scanActive)return;if(!scanning&&video.readyState>=2){scanning=true;try{const codes=await detector.detect(video);if(codes.length&&codes[0].rawValue){const value=codes[0].rawValue.trim();closeScanner();for(const id of ['search2023','search2025','searchPatrimonial','searchSerie'])$(id).value='';$(target).value=value;$('found').textContent='Código escaneado en '+button.getAttribute('aria-label')+'. Pulsa Buscar activo.';$(target).focus();return}}catch(e){$('scanStatus').textContent='No se pudo leer el código: '+e.message}finally{scanning=false}}scanFrame=requestAnimationFrame(tick)};
+  const tick=async()=>{if(!scanActive)return;if(!scanning&&video.readyState>=2){scanning=true;try{const codes=scanWithZXing?(()=>{try{const result=detector.decodeFromVideoElement(video);return result?[{rawValue:result.getText()}]:[]}catch{return []}})():await detector.detect(video);if(codes.length&&codes[0].rawValue){const value=codes[0].rawValue.trim();closeScanner();for(const id of ['search2023','search2025','searchPatrimonial','searchSerie'])$(id).value='';$(target).value=value;$('found').textContent='Código escaneado en '+button.getAttribute('aria-label')+'. Pulsa Buscar activo.';$(target).focus();return}}catch(e){$('scanStatus').textContent='No se pudo leer el código: '+e.message}finally{scanning=false}}scanFrame=requestAnimationFrame(tick)};
   scanFrame=requestAnimationFrame(tick);
  }catch(e){closeScanner();alert('No se pudo abrir el escáner: '+e.message)}
 });
