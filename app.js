@@ -4,7 +4,7 @@ const BASE=CFG.apiBase||'/api/paginas.asmx/';
 const $=id=>document.getElementById(id);
 let currentUser='', selected=null, busy=false;
 const FIELD_GROUPS={
- ident:[['CodigoNuevo','Código nuevo',true],['CodSbn','Código patrimonial'],['Cod2023','Código 2023'],['Cod2025','Código 2025'],['Serie','Serie'],['DescripcionActivo','Descripción del activo',true],['Marca','Marca'],['Modelo','Modelo'],['Color','Color'],['Largo','Largo'],['Ancho','Ancho'],['Alto','Alto']],
+ ident:[['CodigoNuevo','Código nuevo',true],['CodSbn','Código patrimonial'],['Cod2023','Código 2023'],['Cod2025','Código 2025'],['Serie','Serie'],['DescripcionActivo','Descripción del activo',true],['Marca','Marca'],['Modelo','Modelo'],['Material','Material'],['Color','Color'],['Largo','Largo'],['Ancho','Ancho'],['Alto','Alto']],
  ubic:[['UbicacionCodigo','Código de ubicación'],['UbicacionDescripcion','Descripción de ubicación'],['CoordinacionArea','Coordinación / área'],['SubunidadServicio','Subunidad / servicio'],['UnidadOrganica','Unidad orgánica'],['UsuarioAsignadoNombre','Usuario asignado'],['Locador','Locador']]
 };
 const FIELDS=[...FIELD_GROUPS.ident,...FIELD_GROUPS.ubic];
@@ -128,7 +128,7 @@ $('lookup').onclick=async()=>{
  for(const [key,aliases] of Object.entries(SEARCH_FIELDS))form.namedItem(key).value=aliases.map(k=>selected[k]).find(v=>v!==null&&v!==undefined)??'';
  for(const [key,aliases] of Object.entries({
   DescripcionActivo:['DescripcionActivo','Descripcion','descripcion'],
-  Color:['Color'],Largo:['Largo'],Ancho:['Ancho'],Alto:['Alto']
+  Material:['Material','material'],Color:['Color'],Largo:['Largo'],Ancho:['Ancho'],Alto:['Alto']
  }))form.namedItem(key).value=aliases.map(k=>selected[k]).find(v=>v!==null&&v!==undefined)??'';
  const estado=String(selected.EstadoActivo??selected.Estado??'').trim().toUpperCase();
  form.namedItem('EstadoActivo').value=({B:'B',BUENO:'B',R:'R',REGULAR:'R',M:'M',MALO:'M'})[estado]??'';
