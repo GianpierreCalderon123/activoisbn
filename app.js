@@ -207,5 +207,27 @@ async function sendPhotoSet(job){
 }
 $('imageCorrectionForm').onsubmit=async e=>{e.preventDefault();const code=$('correctionCode').value.trim();const photos=['correctionPhoto','correctionQr','correctionSerie'].map(id=>$(id).files[0]||null);if(!code)return alert('Ingrese el código nuevo');if(!photos.some(Boolean))return alert('Seleccione al menos una fotografía');const item={id:crypto.randomUUID(),code,photos,uploaded:[false,false,false],createdAt:new Date().toISOString(),status:'pending'};try{await put('imageCorrections',item);alert('Fotografías guardadas para envío.');e.target.reset()}catch(err){alert('No se pudieron guardar: '+err.message)}};
 $('sendCorrections').onclick=async()=>{if(busy)return;if(!navigator.onLine)return alert('Se necesita conexión para enviar imágenes');busy=true;$('sendCorrections').disabled=true;$('correctionLog').textContent='';try{const jobs=(await all('imageCorrections')).filter(x=>x.status!=='synced');for(const job of jobs){try{await sendPhotoSet(job);job.status='synced';job.photos=[null,null,null];await put('imageCorrections',job);$('correctionLog').textContent+='OK: '+job.code+'\\n'}catch(err){job.lastError=err.message;await put('imageCorrections',job);$('correctionLog').textContent+='ERROR '+job.code+': '+err.message+'\\n'}}}finally{busy=false;$('sendCorrections').disabled=false}};
+// Export is read-only: never mutates IndexedDB or attempts a network upload.
+async function exportTomas(){
+ const button=$('exportTomas');button.disabled=true;
+ try{
+  const records=await all('records');
+  if(!records.length){alert('No hay tomas guardadas en este dispositivo.');return}
+  const fields=[...new Set(records.flatMap(r=>Object.keys(r.data||{})))].sort();
+  const headers=['IdLocal','IdEnvio','FechaRegistro','Estado','DatosEnviados','Intentos','UltimoError','FotoActivoGuardada','FotoQRGuardada','FotoSerieGuardada','FotoActivoEnviada','FotoQREnviada','FotoSerieEnviada',...fields];
+  const escapeCSV=v=>{let t=String(v??'');if(/^[=+@-]/.test(t))t="'"+t;return '"'+t.replace(/"/g,'""')+'"';};
+  const lines=[headers.map(escapeCSV).join(';')];
+  for(const r of records){
+   const values=[r.id,r.remoteId,r.createdAt,r.status,r.sentData,r.attempts||0,r.lastError||'',...[0,1,2].map(i=>r.photos?.[i]?'SI':'NO'),...[0,1,2].map(i=>r.uploaded?.[i]?'SI':'NO'),...fields.map(k=>r.data?.[k]??'')];
+   lines.push(values.map(escapeCSV).join(';'));
+  }
+  const blob=new Blob(['\uFEFF'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob),a=document.createElement('a');
+  a.href=url;a.download='InventarioFW_Tomas_'+new Date().toISOString().slice(0,10)+'.csv';
+  document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+  $('exportInfo').textContent='Exportación preparada: '+records.length+' tomas. No se alteraron los registros ni las fotografías.';
+ }catch(err){alert('Error al exportar tomas: '+err.message)}finally{button.disabled=false}
+}
+$('exportTomas').onclick=exportTomas;
 $('homeSendToma').onclick=()=>{show('sync');$('syncpending').click()};
 if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(console.warn);
