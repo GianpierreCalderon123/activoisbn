@@ -102,6 +102,17 @@ document.querySelectorAll('[data-scan]').forEach(button=>button.onclick=async()=
 });
 const SEARCH_FIELDS={Cod2023:['Cod2023','Codigo2023'],Cod2025:['Cod2025','Codigo2025','Codigo2020','Cod2020'],CodSbn:['CodSbn','CodigoPatrimonial','CodigoSBN'],Serie:['Serie','NumeroSerie','NroSerie','SerieActivo','NumSerie']};
 $('clearSearch').onclick=()=>{for(const id of ['search2023','search2025','searchPatrimonial','searchSerie'])$(id).value='';$('found').textContent=''};
+// Optional offline reference for the 5,092 patrimonial assets, keyed independently by each identifier.
+let specialAssetsPromise;
+async function specialAssets(){
+ if(!specialAssetsPromise)specialAssetsPromise=fetch('./activos_especiales_detalle.tsv').then(r=>r.ok?r.text():'').then(t=>{
+  const maps={CodSbn:new Map(),Cod2025:new Map(),Cod2023:new Map(),Serie:new Map()};
+  for(const line of t.split(/\r?\n/)){const [pat,c25,c23,serie,marca,modelo]=line.split('\t');if(!pat)continue;const item={pat,c25,c23,serie,marca,modelo};
+   for(const [field,key] of [['CodSbn',pat],['Cod2025',c25],['Cod2023',c23],['Serie',serie]])if(key)maps[field].set(key.trim().toLocaleLowerCase(),item);
+  }return maps;
+ }).catch(()=>({CodSbn:new Map(),Cod2025:new Map(),Cod2023:new Map(),Serie:new Map()}));
+ return specialAssetsPromise;
+}
 $('lookup').onclick=async()=>{
  const criteria=[['Cod2023',$('search2023').value.trim()],['Cod2025',$('search2025').value.trim()],['CodSbn',$('searchPatrimonial').value.trim()],['Serie',$('searchSerie').value.trim()]].filter(([,v])=>v);
  if(criteria.length!==1){$('found').textContent='Ingresa solo uno de los cuatro criterios de búsqueda.';return}
@@ -110,6 +121,7 @@ $('lookup').onclick=async()=>{
  selected=rows.find(x=>SEARCH_FIELDS[field].some(k=>String(x[k]??'').trim().toLocaleLowerCase()===q));
  $('found').textContent=selected?'Activo encontrado en maestros locales':'No se encontró el activo en los maestros descargados';
  if(!selected)return;
+ const special=(await specialAssets())[field].get(q) || (await specialAssets()).CodSbn.get(String(SEARCH_FIELDS.CodSbn.map(k=>selected[k]).find(Boolean)||'').trim().toLocaleLowerCase()) || (await specialAssets()).Cod2025.get(String(SEARCH_FIELDS.Cod2025.map(k=>selected[k]).find(Boolean)||'').trim().toLocaleLowerCase()) || (await specialAssets()).Cod2023.get(String(SEARCH_FIELDS.Cod2023.map(k=>selected[k]).find(Boolean)||'').trim().toLocaleLowerCase()) || (await specialAssets()).Serie.get(String(SEARCH_FIELDS.Serie.map(k=>selected[k]).find(Boolean)||'').trim().toLocaleLowerCase());
  const form=$('form').elements;
  // Igual que Android: solo datos de identificación; el código nuevo siempre queda vacío.
  form.namedItem('CodigoNuevo').value='';
@@ -120,7 +132,10 @@ $('lookup').onclick=async()=>{
  }))form.namedItem(key).value=aliases.map(k=>selected[k]).find(v=>v!==null&&v!==undefined)??'';
  const estado=String(selected.EstadoActivo??selected.Estado??'').trim().toUpperCase();
  form.namedItem('EstadoActivo').value=({B:'B',BUENO:'B',R:'R',REGULAR:'R',M:'M',MALO:'M'})[estado]??'';
- // No modificar ubicación, usuario, locador, marca, modelo ni fotografías.
+ // Android special-asset rule: only the listed patrimonial items receive series, brand and model.
+ for(const key of ['Serie','Marca','Modelo'])form.namedItem(key).value='';
+ if(special){form.namedItem('Serie').value=special.serie||SEARCH_FIELDS.Serie.map(k=>selected[k]).find(Boolean)||'';form.namedItem('Marca').value=special.marca||selected.Marca||'';form.namedItem('Modelo').value=special.modelo||selected.Modelo||''}
+ // No modificar ubicación, usuario, locador ni fotografías.
 };
 $('form').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);const data=Object.fromEntries([...f.entries()].filter(([k])=>!['photo','qr','seriesphoto'].includes(k)));data.Usuario=currentUser;data.EstadoActivo=f.get('EstadoActivo');data.Sit=f.get('Sit')||'EN USO';data.EsTercero=f.has('EsTercero')?'true':'false';if(!data.CodigoNuevo?.trim()){setTab('ident');return alert('Código nuevo obligatorio')}if(!data.DescripcionActivo?.trim()){setTab('ident');return alert('Descripción del activo obligatoria')}if(!data.UbicacionCodigo?.trim()){setTab('ubic');return alert('Seleccione una ubicación')}if(!data.UsuarioAsignadoNombre?.trim()){setTab('ubic');return alert('Seleccione un usuario asignado')}if(!$('photo').files.length||!$('qr').files.length){setTab('fotos');return alert('Foto del activo y foto del QR son obligatorias')}data.Ubicacion=data.UbicacionCodigo;if(data.CodSbn?.length&&data.CodSbn.length!==12&&!confirm('El código patrimonial no tiene 12 caracteres. ¿Guardar igualmente?'))return;const item={id:crypto.randomUUID(),remoteId:Math.floor(100000000+Math.random()*899999999),data,photos:[...['photo','qr','seriesphoto'].map(id=>$(id).files[0]||null)],status:'pending',createdAt:new Date().toISOString(),sentData:false,uploaded:[false,false,false],attempts:0};try{await put('records',item);alert('Inventario y fotografías guardados localmente');e.target.reset();selected=null;$('found').textContent='';show('home')}catch(err){alert('No se pudo guardar: '+err.message)}};
 async function renderRecords(){const rows=await all('records');const pending=rows.filter(x=>x.status!=='synced').length;$('stats').textContent=`Total: ${rows.length} · Pendientes: ${pending} · Sincronizados: ${rows.length-pending}`;$('records').replaceChildren();for(const r of rows.sort((a,b)=>b.createdAt.localeCompare(a.createdAt))){const div=document.createElement('div');div.className='item';div.textContent=(r.data.CodigoNuevo||r.data.CodSbn||'Sin código')+' — '+(r.status==='synced'?'Sincronizado':r.sentData?'Fotos pendientes':'Pendiente');$('records').append(div)}if(!rows.length)$('records').textContent='No hay registros locales'}
