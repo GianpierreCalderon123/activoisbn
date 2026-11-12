@@ -2,9 +2,9 @@
 const CFG=window.INVENTARIO_CONFIG||{};
 const BASE=CFG.apiBase||'/api/paginas.asmx/';
 const $=id=>document.getElementById(id);
-let currentUser='', selected=null, busy=false;
+let currentUser='', selected=null, busy=false, editingRecordId=null;
 const FIELD_GROUPS={
- ident:[['CodigoNuevo','Código nuevo',true],['CodSbn','Código patrimonial'],['Cod2023','Código 2023'],['Cod2025','Código 2025'],['Serie','Serie'],['DescripcionActivo','Descripción del activo',true],['Marca','Marca'],['Modelo','Modelo'],['Color','Color'],['Largo','Largo'],['Ancho','Ancho'],['Alto','Alto']],
+ ident:[['CodigoNuevo','Código nuevo',true],['CodSbn','Código patrimonial'],['Cod2023','Código 2023'],['Cod2025','Código 2025'],['Serie','Serie'],['DescripcionActivo','Descripción del activo',true],['Marca','Marca'],['Modelo','Modelo'],['Observacion1','Observación 1'],['Observacion2','Observación 2'],['Color','Color'],['Largo','Largo'],['Ancho','Ancho'],['Alto','Alto']],
  ubic:[['UbicacionCodigo','Código de ubicación'],['UbicacionDescripcion','Descripción de ubicación'],['CoordinacionArea','Coordinación / área'],['SubunidadServicio','Subunidad / servicio'],['UnidadOrganica','Unidad orgánica'],['UsuarioAsignadoNombre','Usuario asignado'],['Locador','Locador']]
 };
 const FIELDS=[...FIELD_GROUPS.ident,...FIELD_GROUPS.ubic];
@@ -26,7 +26,7 @@ function show(view){document.querySelectorAll('.view').forEach(x=>x.hidden=x.id!
 function setTab(tab){document.querySelectorAll('[data-group]').forEach(el=>el.hidden=el.dataset.group!==tab);document.querySelectorAll('[data-tab]').forEach(el=>el.classList.toggle('active',el.dataset.tab===tab));document.querySelectorAll('[data-photo-group]').forEach(el=>el.hidden=tab!=='fotos');document.querySelectorAll('[data-state-group]').forEach(el=>el.hidden=tab!=='ident')}
 document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
 function online(){$('connection').textContent=navigator.onLine?'● Conectado':'● Sin conexión'}addEventListener('online',online);addEventListener('offline',online);online();
-document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>show(b.dataset.view));
+document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{if(b.dataset.view==='record' && !editingRecordId){$('form').reset();$('recordMode').textContent='Nueva toma'}show(b.dataset.view)});
 $('logout').onclick=()=>{currentUser='';$('app').hidden=true;$('login').hidden=false;$('pass').value=''};
 function toHex(bytes){return [...new Uint8Array(bytes)].map(x=>x.toString(16).padStart(2,'0')).join('')}
 async function passwordKey(pw,salt){const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(pw),'PBKDF2',false,['deriveBits']);return toHex(await crypto.subtle.deriveBits({name:'PBKDF2',salt:new Uint8Array(salt),iterations:210000,hash:'SHA-256'},key,256))}
@@ -137,8 +137,31 @@ $('lookup').onclick=async()=>{
  if(special){form.namedItem('Serie').value=special.serie||SEARCH_FIELDS.Serie.map(k=>selected[k]).find(Boolean)||'';form.namedItem('Marca').value=special.marca||selected.Marca||'';form.namedItem('Modelo').value=special.modelo||selected.Modelo||''}
  // No modificar ubicación, usuario, locador ni fotografías.
 };
-$('form').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);const data=Object.fromEntries([...f.entries()].filter(([k])=>!['photo','qr','seriesphoto'].includes(k)));data.Usuario=currentUser;data.EstadoActivo=f.get('EstadoActivo');data.Sit=f.get('Sit')||'EN USO';data.EsTercero=f.has('EsTercero')?'true':'false';if(!data.CodigoNuevo?.trim()){setTab('ident');return alert('Código nuevo obligatorio')}if(!data.DescripcionActivo?.trim()){setTab('ident');return alert('Descripción del activo obligatoria')}if(!data.UbicacionCodigo?.trim()){setTab('ubic');return alert('Seleccione una ubicación')}if(!data.UsuarioAsignadoNombre?.trim()){setTab('ubic');return alert('Seleccione un usuario asignado')}if(!$('photo').files.length||!$('qr').files.length){setTab('fotos');return alert('Foto del activo y foto del QR son obligatorias')}data.Ubicacion=data.UbicacionCodigo;if(data.CodSbn?.length&&data.CodSbn.length!==12&&!confirm('El código patrimonial no tiene 12 caracteres. ¿Guardar igualmente?'))return;const item={id:crypto.randomUUID(),remoteId:Math.floor(100000000+Math.random()*899999999),data,photos:[...['photo','qr','seriesphoto'].map(id=>$(id).files[0]||null)],status:'pending',createdAt:new Date().toISOString(),sentData:false,uploaded:[false,false,false],attempts:0};try{await put('records',item);alert('Inventario y fotografías guardados localmente');e.target.reset();selected=null;$('found').textContent='';show('home')}catch(err){alert('No se pudo guardar: '+err.message)}};
-async function renderRecords(){const rows=await all('records');const pending=rows.filter(x=>x.status!=='synced').length;$('stats').textContent=`Total: ${rows.length} · Pendientes: ${pending} · Sincronizados: ${rows.length-pending}`;$('records').replaceChildren();for(const r of rows.sort((a,b)=>b.createdAt.localeCompare(a.createdAt))){const div=document.createElement('div');div.className='item';div.textContent=(r.data.CodigoNuevo||r.data.CodSbn||'Sin código')+' — '+(r.status==='synced'?'Sincronizado':r.sentData?'Fotos pendientes':'Pendiente');$('records').append(div)}if(!rows.length)$('records').textContent='No hay registros locales'}
+$('form').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);const data=Object.fromEntries([...f.entries()].filter(([k])=>!['photo','qr','seriesphoto'].includes(k)));data.Usuario=currentUser;data.EstadoActivo=f.get('EstadoActivo');data.Sit=f.get('Sit')||'EN USO';data.EsTercero=f.has('EsTercero')?'true':'false';if(!data.CodigoNuevo?.trim()){setTab('ident');return alert('Código nuevo obligatorio')}if(!data.DescripcionActivo?.trim()){setTab('ident');return alert('Descripción del activo obligatoria')}if(!data.UbicacionCodigo?.trim()){setTab('ubic');return alert('Seleccione una ubicación')}if(!data.UsuarioAsignadoNombre?.trim()){setTab('ubic');return alert('Seleccione un usuario asignado')}if((!$('photo').files.length&&!((editingRecordId&&await get('records',editingRecordId))?.photos?.[0]))||(!$('qr').files.length&&!((editingRecordId&&await get('records',editingRecordId))?.photos?.[1]))){setTab('fotos');return alert('Foto del activo y foto del QR son obligatorias')}data.Ubicacion=data.UbicacionCodigo;if(data.CodSbn?.length&&data.CodSbn.length!==12&&!confirm('El código patrimonial no tiene 12 caracteres. ¿Guardar igualmente?'))return;const prior=editingRecordId?await get('records',editingRecordId):null;
+if(prior?.sentData)return alert('Esta toma ya se envió al servidor y no puede editarse localmente.');
+const item=prior||{id:crypto.randomUUID(),remoteId:Math.floor(100000000+Math.random()*899999999),status:'pending',createdAt:new Date().toISOString(),sentData:false,uploaded:[false,false,false],attempts:0};
+item.data=data;item.photos=['photo','qr','seriesphoto'].map((id,i)=>$(id).files[0]||prior?.photos?.[i]||null);try{await put('records',item);alert('Inventario y fotografías guardados localmente');e.target.reset();editingRecordId=null;$('recordMode').textContent='Nueva toma';selected=null;$('found').textContent='';show('home')}catch(err){alert('No se pudo guardar: '+err.message)}};
+async function editRecord(id){
+ const r=await get('records',id);if(!r)return alert('No se encontró la toma');
+ if(r.sentData||r.status==='synced')return alert('Esta toma ya fue enviada y no puede modificarse localmente.');
+ editingRecordId=id;$('form').reset();
+ for(const [key,val] of Object.entries(r.data||{})){const el=$('form').elements.namedItem(key);if(!el)continue;if(el.type==='checkbox')el.checked=val===true||val==='true';else el.value=val??''}
+ $('recordMode').textContent='Editando toma '+(r.data.CodigoNuevo||'');$('found').textContent='Las fotografías guardadas se conservan; selecciona archivos solo si deseas reemplazarlas.';
+ show('record');
+}
+$('cancelEdit').onclick=()=>{editingRecordId=null;$('form').reset();$('recordMode').textContent='Nueva toma';show('home')};
+async function renderRecords(){
+ const rows=await all('records');const pending=rows.filter(x=>x.status!=='synced').length;
+ $('stats').textContent=`Total: ${rows.length} · Pendientes: ${pending} · Sincronizados: ${rows.length-pending}`;
+ $('records').replaceChildren();
+ for(const r of rows.sort((a,b)=>b.createdAt.localeCompare(a.createdAt))){
+  const div=document.createElement('div');div.className='item';
+  const label=document.createElement('span');label.textContent=(r.data.CodigoNuevo||r.data.CodSbn||'Sin código')+' — '+(r.status==='synced'?'Sincronizado':r.sentData?'Fotos pendientes':'Pendiente');div.append(label);
+  if(!r.sentData&&r.status!=='synced'){const btn=document.createElement('button');btn.type='button';btn.textContent='Editar';btn.onclick=()=>editRecord(r.id);div.append(btn)}
+  $('records').append(div)
+ }
+ if(!rows.length)$('records').textContent='No hay registros locales';
+}
 function log(s){$('log').textContent+=s+'\n'}
 $('syncmasters').onclick=async()=>{if(!navigator.onLine)return alert('Necesitas internet');$('syncmasters').disabled=true;$('log').textContent='';const endpoints=[['usuariosSistema','ObtenerMaestroUsuariosSistema'],['ubicaciones','ObtenerMaestroUbicacionesV2'],['usuarios','ObtenerMaestroUsuarios'],['locadores','ObtenerMaestroLocadores']];try{for(const [id,method] of endpoints){log('Descargando '+id+'...');const rows=rowsOf(await api(method,{}));if(id==='usuariosSistema'&&!rows.length)throw Error('UsuariosSistema vacío');await put('masters',{id,rows,updatedAt:new Date().toISOString()});log('OK: '+rows.length+' registros')}const size=Number(CFG.pageSize)||500;let page=1,total=0,rows=[];while(true){log('Activos, página '+page+'...');const batch=rowsOf(await api('ObtenerMaestroActivosV2',{pagina:page,tamanoPagina:size}));rows.push(...batch);total+=batch.length;log('Activos descargados: '+total);if(batch.length<size)break;if(page++>10000)throw Error('Límite de páginas superado')}await put('masters',{id:'activos',rows,updatedAt:new Date().toISOString()});log('Maestros sincronizados correctamente: '+total+' activos')}catch(e){log('ERROR: '+e.message+'; se conservan los maestros previos.')}finally{$('syncmasters').disabled=false}};
 
