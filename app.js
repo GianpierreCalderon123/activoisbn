@@ -11,7 +11,7 @@ const FIELDS=[...FIELD_GROUPS.ident,...FIELD_GROUPS.ubic];
 const PICKER_FIELDS=['UbicacionCodigo','UsuarioAsignadoNombre','Locador'];
 const pickers={UbicacionCodigo:{store:'ubicaciones',keys:['Codigo','Descripcion'],caption:'Ubicación'},UsuarioAsignadoNombre:{store:'usuarios',keys:['CodigoUsuario','NombreCompleto'],caption:'Usuario asignado'},Locador:{store:'locadores',keys:['CodigoLocador','NombreCompleto'],caption:'Locador'}};
 $('fields').innerHTML=Object.entries(FIELD_GROUPS).map(([group,items])=>`<div class="field-group" data-group="${group}">${items.map(([key,label])=>`<label>${label}<input name="${key}" autocomplete="off"></label>`).join('')}</div>`).join('');
-function openDB(){return new Promise((resolve,reject)=>{const r=indexedDB.open('inventariofw-pwa',3);r.onupgradeneeded=()=>{for(const name of ['masters','records','session','meta','imageCorrections'])if(!r.result.objectStoreNames.contains(name))r.result.createObjectStore(name,{keyPath:'id'})};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
+function openDB(){return new Promise((resolve,reject)=>{const r=indexedDB.open('inventariofw-pwa',4);r.onupgradeneeded=()=>{for(const name of ['masters','records','session','meta','imageCorrections'])if(!r.result.objectStoreNames.contains(name))r.result.createObjectStore(name,{keyPath:'id'})};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
 async function transact(store,mode,fn){const db=await openDB();return new Promise((ok,no)=>{const tx=db.transaction(store,mode),req=fn(tx.objectStore(store));let result; if(req){req.onsuccess=()=>{result=req.result};req.onerror=()=>no(req.error)}tx.oncomplete=()=>{db.close();ok(result)};tx.onerror=()=>{db.close();no(tx.error)}})}
 const put=(store,item)=>transact(store,'readwrite',s=>s.put(item));
 const get=(store,id)=>transact(store,'readonly',s=>s.get(id));
@@ -143,7 +143,7 @@ const item=prior||{id:crypto.randomUUID(),remoteId:Math.floor(100000000+Math.ran
 item.data=data;item.photos=['photo','qr','seriesphoto'].map((id,i)=>$(id).files[0]||prior?.photos?.[i]||null);try{await put('records',item);alert('Inventario y fotografías guardados localmente');e.target.reset();editingRecordId=null;$('recordMode').textContent='Nueva toma';selected=null;$('found').textContent='';show('home')}catch(err){alert('No se pudo guardar: '+err.message)}};
 async function editRecord(id){
  const r=await get('records',id);if(!r)return alert('No se encontró la toma');
- if(r.sentData||r.status==='synced')return alert('Esta toma ya fue enviada y no puede modificarse localmente.');
+ const state=await syncState(r);if(state.sentData||state.status==='synced'||state.deliveryState==='sending-unconfirmed')return alert('Esta toma ya fue enviada y no puede modificarse localmente.');
  editingRecordId=id;$('form').reset();
  for(const [key,val] of Object.entries(r.data||{})){const el=$('form').elements.namedItem(key);if(!el)continue;if(el.type==='checkbox')el.checked=val===true||val==='true';else el.value=val??''}
  $('recordMode').textContent='Editando toma '+(r.data.CodigoNuevo||'');$('found').textContent='Las fotografías guardadas se conservan; selecciona archivos solo si deseas reemplazarlas.';
@@ -151,13 +151,13 @@ async function editRecord(id){
 }
 $('cancelEdit').onclick=()=>{editingRecordId=null;$('form').reset();$('recordMode').textContent='Nueva toma';show('home')};
 async function renderRecords(){
- const rows=await all('records');const pending=rows.filter(x=>x.status!=='synced').length;
+ const rows=await all('records');const states=new Map();for(const r of rows)states.set(r.id,await syncState(r));const pending=rows.filter(x=>states.get(x.id).status!=='synced').length;
  $('stats').textContent=`Total: ${rows.length} · Pendientes: ${pending} · Sincronizados: ${rows.length-pending}`;
  $('records').replaceChildren();
  for(const r of rows.sort((a,b)=>b.createdAt.localeCompare(a.createdAt))){
   const div=document.createElement('div');div.className='item';
-  const label=document.createElement('span');label.textContent=(r.data.CodigoNuevo||r.data.CodSbn||'Sin código')+' — '+(r.status==='synced'?'Sincronizado':r.sentData?'Fotos pendientes':'Pendiente');div.append(label);
-  if(!r.sentData&&r.status!=='synced'){const btn=document.createElement('button');btn.type='button';btn.textContent='Editar';btn.onclick=()=>editRecord(r.id);div.append(btn)}
+  const label=document.createElement('span');label.textContent=(r.data.CodigoNuevo||r.data.CodSbn||'Sin código')+' — '+(states.get(r.id).status==='synced'?'Sincronizado':states.get(r.id).sentData?'Fotos pendientes':'Pendiente');div.append(label);
+  if(!states.get(r.id).sentData&&states.get(r.id).status!=='synced'&&states.get(r.id).deliveryState!=='sending-unconfirmed'){const btn=document.createElement('button');btn.type='button';btn.textContent='Editar';btn.onclick=()=>editRecord(r.id);div.append(btn)}
   $('records').append(div)
  }
  if(!rows.length)$('records').textContent='No hay registros locales';
@@ -186,8 +186,48 @@ async function compressPhoto(file){
   canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close?.();
   return await new Promise((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(Error('No se pudo comprimir fotografía')),'image/jpeg',0.72));
 }
-async function sendRecord(r){if(!r.sentData){const body=new URLSearchParams();if(!r.remoteId){r.remoteId=Math.floor(100000000+Math.random()*899999999);await put('records',r)}const d={...r.data,Id:r.data.Id||String(r.remoteId),Dia:r.data.Dia||new Date(r.createdAt).toLocaleDateString('es-PE'),Hora:r.data.Hora||new Date(r.createdAt).toLocaleTimeString('es-PE',{hour12:false}),TipoEquipo:''};for(const k of SEND_FIELDS)body.set(k,String(d[k]??''));r.deliveryState='sending-unconfirmed';r.lastError='';await put('records',r);const result=await postToma(body);if(result===false||result===null||result?.Success===false||result?.Exito===false||result?.Error||result?.error)throw Error('Servidor rechazó inventario: '+JSON.stringify(result));r.sentData=true;r.deliveryState='confirmed';r.status='photos-pending';await put('records',r)}for(let i=0;i<r.photos.length;i++){if(!r.photos[i]||r.uploaded[i])continue;const code=r.data.CodigoNuevo;const blob=await compressPhoto(r.photos[i]);const form=new FormData();form.append('file',blob,`${code}_${i+1}.jpg`);form.append('id',`${code}_${i+1}`);const response=await fetch(CFG.imageUpload,{method:'POST',body:form});if(!response.ok){const detail=await response.text();throw Error('Imagen '+(i+1)+': HTTP '+response.status+' '+detail.slice(0,250))}r.uploaded[i]=true;r.photos[i]=null;await put('records',r)}r.status='synced';await put('records',r)}
-$('syncpending').onclick=async()=>{if(busy)return;if(!navigator.onLine)return alert('No hay conexión');busy=true;$('syncpending').disabled=true;$('log').textContent='';try{const pending=(await all('records')).filter(r=>r.status!=='synced');const uncertain=pending.filter(r=>!r.sentData&&r.deliveryState==='sending-unconfirmed');if(uncertain.length){log('ATENCIÓN: '+uncertain.length+' tomas tienen envío incierto (la conexión pudo cortarse después de grabar en SQL). No se reenviarán automáticamente para evitar duplicados: '+uncertain.map(r=>r.data.CodigoNuevo).join(', '));}if(!pending.length)return log('No hay registros pendientes');log('Pendientes: '+pending.length);let ok=0,failed=0;for(const r of pending){if(!r.sentData&&r.deliveryState==='sending-unconfirmed'){log('OMITIDA por posible duplicado: '+r.data.CodigoNuevo);continue}try{await sendRecord(r);ok++;log('OK: '+r.data.CodigoNuevo)}catch(e){failed++;r.attempts=(r.attempts||0)+1;r.lastError=e.message;await put('records',r);log('ERROR '+r.data.CodigoNuevo+': '+e.message+(r.deliveryState==='sending-unconfirmed'?' | Verificar en SQL antes de reintentar.':''))}}log(`Finalizado: ${ok} completos; ${failed} pendientes de reintento.`);await renderRecords()}catch(e){log('ERROR GENERAL: '+e.message)}finally{busy=false;$('syncpending').disabled=false}};
+// Store sync progress separately: Safari must never re-serialize old File/Blob photos.
+async function syncState(r){return await get('meta','delivery:'+r.id)||{id:'delivery:'+r.id,remoteId:r.remoteId||Math.floor(100000000+Math.random()*899999999),sentData:!!r.sentData,deliveryState:r.deliveryState||'',uploaded:[...(r.uploaded||[false,false,false])],status:r.status||'pending',attempts:r.attempts||0,lastError:r.lastError||''}}
+async function saveSyncState(st){await put('meta',st)}
+async function sendRecord(r,st){
+ if(!st.sentData){
+  const body=new URLSearchParams();
+  const d={...r.data,Id:r.data.Id||String(st.remoteId),Dia:r.data.Dia||new Date(r.createdAt).toLocaleDateString('es-PE'),Hora:r.data.Hora||new Date(r.createdAt).toLocaleTimeString('es-PE',{hour12:false}),TipoEquipo:''};
+  for(const k of SEND_FIELDS)body.set(k,String(d[k]??''));
+  // This is a metadata-only write, not a rewrite of the photo-containing record.
+  st.deliveryState='sending-unconfirmed';st.lastError='';await saveSyncState(st);
+  const result=await postToma(body);
+  if(result===false||result===null||result?.Success===false||result?.Exito===false||result?.Error||result?.error)throw Error('Servidor rechazó inventario: '+JSON.stringify(result));
+  st.sentData=true;st.deliveryState='confirmed';st.status='photos-pending';await saveSyncState(st);
+ }
+ for(let i=0;i<(r.photos||[]).length;i++){
+  if(!r.photos[i]||st.uploaded[i])continue;
+  const code=r.data.CodigoNuevo,blob=await compressPhoto(r.photos[i]);
+  const form=new FormData();form.append('file',blob,`${code}_${i+1}.jpg`);form.append('id',`${code}_${i+1}`);
+  const response=await fetch(CFG.imageUpload,{method:'POST',body:form});
+  if(!response.ok)throw Error('Imagen '+(i+1)+': HTTP '+response.status+' '+(await response.text()).slice(0,250));
+  st.uploaded[i]=true;await saveSyncState(st);
+  // Keep legacy photo blobs untouched: clearing them requires rewriting old File objects.
+ }
+ st.status='synced';await saveSyncState(st);
+}
+$('syncpending').onclick=async()=>{
+ if(busy)return;if(!navigator.onLine)return alert('No hay conexión');
+ busy=true;$('syncpending').disabled=true;$('log').textContent='';
+ try{
+  const records=await all('records'),pending=[];
+  for(const r of records){const st=await syncState(r);if(st.status!=='synced')pending.push({r,st})}
+  log('Pendientes: '+pending.length);
+  let ok=0,failed=0,uncertain=0;
+  for(const {r,st} of pending){
+   if(!st.sentData&&st.deliveryState==='sending-unconfirmed'){uncertain++;log('SIN REENVÍO (verificar SQL): '+r.data.CodigoNuevo);continue}
+   try{await sendRecord(r,st);ok++;log('OK: '+r.data.CodigoNuevo)}
+   catch(e){failed++;st.attempts++;st.lastError=e.message;try{await saveSyncState(st)}catch(writeError){log('No se pudo registrar diagnóstico: '+writeError.message)}log('ERROR '+r.data.CodigoNuevo+': '+e.message)}
+  }
+  log(`Finalizado: ${ok} completos, ${failed} errores, ${uncertain} inciertos sin reenviar.`);
+  await renderRecords();
+ }catch(e){log('ERROR GENERAL: '+e.message)}finally{busy=false;$('syncpending').disabled=false}
+};
 // Actualización independiente: solo código nuevo y fotos, sin enviar una nueva toma.
 async function sendPhotoSet(job){
  for(let i=0;i<job.photos.length;i++){
@@ -218,7 +258,8 @@ async function exportTomas(){
   const escapeCSV=v=>{let t=String(v??'');if(/^[=+@-]/.test(t))t="'"+t;return '"'+t.replace(/"/g,'""')+'"';};
   const lines=[headers.map(escapeCSV).join(';')];
   for(const r of records){
-   const values=[r.id,r.remoteId,r.createdAt,r.status,r.sentData,r.attempts||0,r.lastError||'',r.deliveryState||'',...[0,1,2].map(i=>r.photos?.[i]?'SI':'NO'),...[0,1,2].map(i=>r.uploaded?.[i]?'SI':'NO'),...fields.map(k=>r.data?.[k]??'')];
+   const st=await syncState(r);
+   const values=[r.id,st.remoteId,r.createdAt,st.status,st.sentData,st.attempts||0,st.lastError||'',st.deliveryState||'',...[0,1,2].map(i=>r.photos?.[i]?'SI':'NO'),...[0,1,2].map(i=>st.uploaded?.[i]?'SI':'NO'),...fields.map(k=>r.data?.[k]??'')];
    lines.push(values.map(escapeCSV).join(';'));
   }
   const blob=new Blob(['\uFEFF'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'});
