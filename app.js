@@ -264,7 +264,18 @@ $('syncExportReport').onclick=()=>{
  const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');
  a.href=url;a.download='InventarioFW_Diagnostico_'+new Date().toISOString().slice(0,10)+'.csv';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
 };
-async function syncState(r){return await get('meta','delivery:'+r.id)||{id:'delivery:'+r.id,remoteId:r.remoteId||Math.floor(100000000+Math.random()*899999999),sentData:!!r.sentData,deliveryState:r.deliveryState||'',uploaded:[...(r.uploaded||[false,false,false])],status:r.status||'pending',attempts:r.attempts||0,lastError:r.lastError||''}}
+function isExplicitServerRejection(message){
+ const m=String(message||'');
+ return /(?:servidor rechaz[oó] toma|HTTP\s*200\s*:\s*ERROR|^ERROR\s*:|CODIGO\s+2026\s+DUPLICADO|NO\s+SE\s+INSERTO\s+NI\s+SE\s+ACTUALIZO)/i.test(m)&&!/Load failed|SIN CONFIRMACI[OÓ]N/i.test(m);
+}
+async function syncState(r){
+ const st=await get('meta','delivery:'+r.id)||{id:'delivery:'+r.id,remoteId:r.remoteId||Math.floor(100000000+Math.random()*899999999),sentData:!!r.sentData,deliveryState:r.deliveryState||'',uploaded:[...(r.uploaded||[false,false,false])],status:r.status||'pending',attempts:r.attempts||0,lastError:r.lastError||''};
+ // Correct historical classifications without touching the records or their Blob/File photos.
+ if(!st.sentData&&st.deliveryState==='sending-unconfirmed'&&isExplicitServerRejection(st.lastError)){
+  st.deliveryState='rejected';st.status='pending';await put('meta',st);
+ }
+ return st;
+}
 async function saveSyncState(st){await put('meta',st)}
 async function sendRecord(r,st){
  if(!st.sentData){
