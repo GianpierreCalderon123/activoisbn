@@ -19,7 +19,24 @@ const all=store=>transact(store,'readonly',s=>s.getAll());
 async function request(url,init){let r;try{r=await fetch(url,init)}catch(e){throw Error('No se pudo conectar. Revise internet, HTTPS y el proxy/CORS: '+e.message)}if(!r.ok){const errorText=await r.text().catch(()=> '');throw Error('HTTP '+r.status+': '+errorText.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0,200))}const txt=await r.text();let j;try{j=JSON.parse(txt)}catch{throw Error('Respuesta no JSON ('+(r.headers.get('content-type')||'sin tipo')+'): '+txt.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0,180))};let d=j?.d??j;if(typeof d==='string'){try{d=JSON.parse(d)}catch{}}return d}
 function api(method,data){return request(BASE+method,{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8','Accept':'application/json'},body:JSON.stringify(data)})}
 // ASMX devuelve JSON para maestros pero puede devolver XML al recibir formularios.
-async function postToma(body){let resp;try{resp=await fetch(BASE+'InsUpdtTomaActivoIsnV2',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','Accept':'*/*'},body})}catch(e){throw Error('No se pudo conectar al guardar toma: '+e.message)}const text=await resp.text();const description=text.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0,350);if(!resp.ok)throw Error('Toma HTTP '+resp.status+': '+description);if(!text.trim())throw Error('Toma: respuesta vacía; verificar el registro en SQL Server antes de reintentar');let value;try{const data=JSON.parse(text);value=data?.d??data}catch{if(!/^\s*</.test(text))throw Error('Toma: respuesta inesperada: '+description);const xml=new DOMParser().parseFromString(text,'text/xml');if(xml.querySelector('parsererror'))throw Error('Toma: XML inválido: '+description);const root=xml.documentElement;if(!['string','boolean','int','long'].includes(root.localName))throw Error('Toma: respuesta XML no reconocida: '+description);value=root.textContent.trim()}if(typeof value==='string'){const clean=value.trim();if(/^(false|error|failed|fall[oó]|exception|incorrecto|rechazado)/i.test(clean))throw Error('Servidor rechazó toma: '+clean.slice(0,250));if(clean.startsWith('{')||clean.startsWith('[')){try{value=JSON.parse(clean)}catch{}}else if(!clean)throw Error('Toma: respuesta sin confirmación')}if(value===false||value===null||value?.Success===false||value?.Exito===false||value?.Error||value?.error)throw Error('Servidor rechazó toma: '+JSON.stringify(value));return value}
+async function postToma(body){
+ let resp;
+ try{resp=await fetch(BASE+'InsUpdtTomaActivoIsnV2',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','Accept':'*/*'},body})}
+ catch(e){throw Error('SIN CONFIRMACIÓN: '+e.message)}
+ let raw;
+ try{raw=await resp.text()}catch(e){throw Error('SIN CONFIRMACIÓN: no se pudo leer respuesta: '+e.message)}
+ let value=raw.trim();
+ if(/^\s*</.test(value)){
+  const xml=new DOMParser().parseFromString(value,'text/xml');
+  if(xml.querySelector('parsererror'))throw Error('SIN CONFIRMACIÓN: XML inválido');
+  value=xml.documentElement?.textContent?.trim()||'';
+ }
+ for(let i=0;i<3;i++){try{const parsed=JSON.parse(value);if(typeof parsed==='string')value=parsed.trim();else if(parsed&&typeof parsed==='object'&&'d' in parsed)value=typeof parsed.d==='string'?parsed.d.trim():JSON.stringify(parsed.d);else if(parsed&&typeof parsed==='object')value=String(parsed.message??parsed.Message??parsed.result??parsed.Result??JSON.stringify(parsed));else value=String(parsed)}catch{break}}
+ const message=value.replace(/\s+/g,' ').trim();
+ if(!resp.ok){const e=Error('HTTP '+resp.status+': '+message.slice(0,700));e.confirmedRejection=resp.status>=400&&resp.status<500;throw e}
+ if(!/^OK(?:\b|\s|:|$)/i.test(message)){const e=Error('HTTP '+resp.status+': '+(message||'Respuesta vacía, sin OK'));e.confirmedRejection=!!message;throw e}
+ return message;
+}
 
 function rowsOf(d){if(Array.isArray(d))return d;for(const key of ['Table','data','rows','Rows'])if(Array.isArray(d?.[key]))return d[key];throw Error('Formato de maestro no reconocido')}
 function show(view){document.querySelectorAll('.view').forEach(x=>x.hidden=x.id!==view);$('login').hidden=true;$('app').hidden=false;if(view==='home')renderRecords();if(view==='sync')refreshSyncReport();if(view==='record')setTab('ident')}
@@ -256,8 +273,8 @@ async function sendRecord(r,st){
   for(const k of SEND_FIELDS)body.set(k,String(d[k]??''));
   // This is a metadata-only write, not a rewrite of the photo-containing record.
   st.deliveryState='sending-unconfirmed';st.lastError='';await saveSyncState(st);
-  const result=await postToma(body);
-  if(result===false||result===null||result?.Success===false||result?.Exito===false||result?.Error||result?.error)throw Error('Servidor rechazó inventario: '+JSON.stringify(result));
+  let result;
+  try{result=await postToma(body)}catch(err){if(err.confirmedRejection){st.deliveryState='rejected';st.status='pending';st.lastError=err.message;await saveSyncState(st)}throw err}
   st.sentData=true;st.deliveryState='confirmed';st.status='photos-pending';await saveSyncState(st);
  }
  for(let i=0;i<(r.photos||[]).length;i++){
@@ -274,17 +291,22 @@ async function sendRecord(r,st){
 $('syncpending').onclick=async()=>{
  if(busy)return;if(!navigator.onLine)return alert('No hay conexión');
  busy=true;$('syncpending').disabled=true;$('log').textContent='';
+ let processed=0,confirmed=0,errors=0,omitted=0;const incidents=[];
  try{
   const records=await all('records'),pending=[];
   for(const r of records){const st=await syncState(r);if(st.status!=='synced')pending.push({r,st})}
-  log('Pendientes: '+pending.length);
-  let ok=0,failed=0,uncertain=0;
   for(const {r,st} of pending){
-   if(!st.sentData&&st.deliveryState==='sending-unconfirmed'){uncertain++;log('SIN REENVÍO (verificar SQL): '+r.data.CodigoNuevo);continue}
-   try{await sendRecord(r,st);ok++;log('OK: '+r.data.CodigoNuevo)}
-   catch(e){failed++;st.attempts++;st.lastError=e.message;try{await saveSyncState(st)}catch(writeError){log('No se pudo registrar diagnóstico: '+writeError.message)}log('ERROR '+r.data.CodigoNuevo+': '+e.message)}
+   const code=String(r.data?.CodigoNuevo||r.data?.CodSbn||'Sin código');
+   if(!st.sentData&&st.deliveryState==='sending-unconfirmed'){omitted++;incidents.push('• '+code+' — ENVÍO INCIERTO: '+(st.lastError||'Verificar SQL antes de reintentar'));continue}
+   processed++;
+   try{await sendRecord(r,st);confirmed++}
+   catch(e){
+    errors++;st.attempts=(st.attempts||0)+1;st.lastError=e.message;
+    try{await saveSyncState(st)}catch(writeError){incidents.push('• '+code+' — No se pudo registrar diagnóstico: '+writeError.message)}
+    incidents.push('• '+code+' — '+e.message);
+   }
   }
-  log(`Finalizado: ${ok} completos, ${failed} errores, ${uncertain} inciertos sin reenviar.`);
+  log('Tomas procesadas: '+processed+'\nGuardadas y confirmadas: '+confirmed+'\nPendientes por error: '+errors+'\nOmitidas: '+omitted+'\n\nDETALLE DE INCIDENCIAS\n\n'+(incidents.join('\n')||'Sin incidencias.')+'\n\nLas tomas sin confirmar permanecen pendientes para reintento.');
   await renderRecords();
  }catch(e){log('ERROR GENERAL: '+e.message)}finally{busy=false;$('syncpending').disabled=false;await refreshSyncReport()}
 };
