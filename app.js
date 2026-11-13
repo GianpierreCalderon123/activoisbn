@@ -199,8 +199,8 @@ async function renderRecords(){
  for(const r of rows.sort((a,b)=>b.createdAt.localeCompare(a.createdAt))){
   const div=document.createElement('div');div.className='item';
   const label=document.createElement('span');label.textContent=(r.data.CodigoNuevo||r.data.CodSbn||'Sin código')+' — '+(states.get(r.id).status==='synced'?'Sincronizado':states.get(r.id).sentData?'Fotos pendientes':'Pendiente');div.append(label);
-  if(!states.get(r.id).sentData&&states.get(r.id).status!=='synced'&&states.get(r.id).deliveryState!=='sending-unconfirmed'){const btn=document.createElement('button');btn.type='button';btn.textContent='Editar';btn.onclick=()=>editRecord(r.id);div.append(btn)}
-  if(!states.get(r.id).sentData&&states.get(r.id).deliveryState==='sending-unconfirmed'){const retry=document.createElement('button');retry.type='button';retry.textContent='Verificar y habilitar reintento';retry.onclick=()=>authorizeRetry(r.id);div.append(retry)}
+  if(!states.get(r.id).sentData&&states.get(r.id).status!=='synced'){const btn=document.createElement('button');btn.type='button';btn.textContent='Editar';btn.onclick=()=>editRecord(r.id);div.append(btn)}
+
   $('records').append(div)
  }
  if(!rows.length)$('records').textContent='No hay registros locales';
@@ -240,7 +240,7 @@ function syncDescription(r,st){
  const detail=st.lastDiagnostic?' | '+formatSyncDiagnostic(st.lastDiagnostic):'';
  if(st.status==='synced')return {code,kind:'synced',label:'Enviado',reason:'Datos y fotos procesados según confirmaciones recibidas'};
  if(st.sentData)return {code,kind:'photos',label:'Fotos pendientes',reason:(st.lastError||'Los datos fueron confirmados; falta completar fotografías')+detail};
- if(st.deliveryState==='sending-unconfirmed')return {code,kind:'uncertain',label:'Por verificar',reason:(st.lastError||'No se recibió confirmación definitiva. Verificar en SQL antes de reenviar')+detail};
+ if(st.deliveryState==='sending-unconfirmed')return {code,kind:'uncertain',label:'Reintento disponible',reason:(st.lastError||'Sin confirmación; se reintentará con el mismo identificador')+detail};
  if(st.lastError)return {code,kind:'error',label:'Error de envío',reason:st.lastError+detail};
  return {code,kind:'pending',label:'Sin enviar',reason:'Toma guardada localmente, todavía sin confirmación del servidor'};
 }
@@ -327,7 +327,6 @@ $('syncpending').onclick=async()=>{
   for(const r of records){const st=await syncState(r);if(st.status!=='synced')pending.push({r,st})}
   for(const {r,st} of pending){
    const code=String(r.data?.CodigoNuevo||r.data?.CodSbn||'Sin código');
-   if(!st.sentData&&st.deliveryState==='sending-unconfirmed'){omitted++;incidents.push('• '+code+' — ENVÍO INCIERTO: '+(st.lastError||'Verificar SQL antes de reintentar')+'\n  '+(formatSyncDiagnostic(st.lastDiagnostic)||'Sin diagnóstico de red: intento anterior a la versión actual'));continue}
    processed++;
    try{await sendRecord(r,st);confirmed++}
    catch(e){
