@@ -19,23 +19,37 @@ const all=store=>transact(store,'readonly',s=>s.getAll());
 async function request(url,init){let r;try{r=await fetch(url,init)}catch(e){throw Error('No se pudo conectar. Revise internet, HTTPS y el proxy/CORS: '+e.message)}if(!r.ok){const errorText=await r.text().catch(()=> '');throw Error('HTTP '+r.status+': '+errorText.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0,200))}const txt=await r.text();let j;try{j=JSON.parse(txt)}catch{throw Error('Respuesta no JSON ('+(r.headers.get('content-type')||'sin tipo')+'): '+txt.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0,180))};let d=j?.d??j;if(typeof d==='string'){try{d=JSON.parse(d)}catch{}}return d}
 function api(method,data){return request(BASE+method,{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8','Accept':'application/json'},body:JSON.stringify(data)})}
 // ASMX devuelve JSON para maestros pero puede devolver XML al recibir formularios.
+function diagnosticError(message,meta={},confirmedRejection=false){
+ const e=new Error(message);e.confirmedRejection=confirmedRejection;e.diagnostic=meta;return e;
+}
 async function postToma(body){
+ const started=performance.now(),requestId='pwa-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,9);
+ const details={requestId,phase:'Conectando con Vercel',httpStatus:'Sin respuesta',elapsedMs:0,upstreamStatus:'No disponible',upstreamMs:'No disponible',origin:'PWA'};
+ const finish=()=>{details.elapsedMs=Math.round(performance.now()-started);return details};
  let resp;
- try{resp=await fetch(BASE+'InsUpdtTomaActivoIsnV2',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','Accept':'*/*'},body})}
- catch(e){throw Error('SIN CONFIRMACIÓN: '+e.message)}
+ try{resp=await fetch(BASE+'InsUpdtTomaActivoIsnV2',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','Accept':'*/*','X-Inventory-Request-Id':requestId},body,cache:'no-store'})}
+ catch(e){throw diagnosticError('SIN CONFIRMACIÓN: conexión interrumpida antes de recibir HTTP ('+e.message+'). No se puede saber si SQL guardó la toma.',finish())}
+ details.httpStatus=resp.status;details.origin=resp.headers.get('X-Inventory-Proxy')||'Respuesta recibida';details.upstreamStatus=resp.headers.get('X-Inventory-Upstream-Status')||'No disponible';details.upstreamMs=resp.headers.get('X-Inventory-Upstream-Ms')||'No disponible';details.phase='Leyendo respuesta HTTP';
  let raw;
- try{raw=await resp.text()}catch(e){throw Error('SIN CONFIRMACIÓN: no se pudo leer respuesta: '+e.message)}
+ try{raw=await resp.text()}catch(e){throw diagnosticError('SIN CONFIRMACIÓN: HTTP '+resp.status+' recibido, pero no se pudo leer la respuesta ('+e.message+').',finish())}
  let value=raw.trim();
  if(/^\s*</.test(value)){
   const xml=new DOMParser().parseFromString(value,'text/xml');
-  if(xml.querySelector('parsererror'))throw Error('SIN CONFIRMACIÓN: XML inválido');
+  if(xml.querySelector('parsererror'))throw diagnosticError('SIN CONFIRMACIÓN: XML inválido',finish());
   value=xml.documentElement?.textContent?.trim()||'';
  }
  for(let i=0;i<3;i++){try{const parsed=JSON.parse(value);if(typeof parsed==='string')value=parsed.trim();else if(parsed&&typeof parsed==='object'&&'d' in parsed)value=typeof parsed.d==='string'?parsed.d.trim():JSON.stringify(parsed.d);else if(parsed&&typeof parsed==='object')value=String(parsed.message??parsed.Message??parsed.result??parsed.Result??JSON.stringify(parsed));else value=String(parsed)}catch{break}}
  const message=value.replace(/\s+/g,' ').trim();
- if(!resp.ok){const e=Error('HTTP '+resp.status+': '+message.slice(0,700));e.confirmedRejection=resp.status>=400&&resp.status<500;throw e}
- if(!/^OK(?:\b|\s|:|$)/i.test(message)){const e=Error('HTTP '+resp.status+': '+(message||'Respuesta vacía, sin OK'));e.confirmedRejection=!!message;throw e}
- return message;
+ details.phase='Validando respuesta del servidor';
+ if(!resp.ok){
+  const rejection=resp.status>=400&&resp.status<500&&!!message&&!/timeout|gateway|connection|conectar|proxy/i.test(message);
+  throw diagnosticError('HTTP '+resp.status+': '+(message||'Sin detalle').slice(0,700),finish(),rejection);
+ }
+ if(!/^OK(?:\b|\s|:|$)/i.test(message)){
+  const rejection=!!message&&/^(ERROR|FALSE|FALLO|RECHAZADO|EXCEPTION)\b/i.test(message);
+  throw diagnosticError('HTTP '+resp.status+': '+(message||'Respuesta vacía, sin OK').slice(0,700),finish(),rejection);
+ }
+ details.phase='Confirmación OK';return {message,diagnostic:finish()};
 }
 
 function rowsOf(d){if(Array.isArray(d))return d;for(const key of ['Table','data','rows','Rows'])if(Array.isArray(d?.[key]))return d[key];throw Error('Formato de maestro no reconocido')}
@@ -217,12 +231,17 @@ async function compressPhoto(file){
 }
 // Store sync progress separately: Safari must never re-serialize old File/Blob photos.
 // Read-only sync dashboard: use the metadata store to avoid rewriting Safari File/Blob values.
+function formatSyncDiagnostic(d){
+ if(!d)return '';
+ return ['Etapa: '+(d.phase||'No disponible'),'HTTP: '+(d.httpStatus??'Sin respuesta'),'Tiempo PWA: '+(d.elapsedMs??'?')+' ms','HTTP Somee: '+(d.upstreamStatus??'No disponible'),'Tiempo Somee: '+(d.upstreamMs??'No disponible')+' ms','Solicitud: '+(d.requestId||'No disponible')].join(' | ');
+}
 function syncDescription(r,st){
  const code=String(r.data?.CodigoNuevo||r.data?.CodSbn||'Sin código');
- if(st.status==='synced')return {code,kind:'synced',label:'Enviado',reason:'Datos y fotos procesados según confirmaciones recibidas'};
- if(st.sentData)return {code,kind:'photos',label:'Fotos pendientes',reason:st.lastError||'Los datos fueron confirmados; falta completar fotografías'};
- if(st.deliveryState==='sending-unconfirmed')return {code,kind:'uncertain',label:'Por verificar',reason:st.lastError||'No se recibió confirmación definitiva. Verificar en SQL antes de reenviar'};
- if(st.lastError)return {code,kind:'error',label:'Error de envío',reason:st.lastError};
+ const detail=st.lastDiagnostic?' | '+formatSyncDiagnostic(st.lastDiagnostic):'';
+ if(st.status='synced')return {code,kind:'synced',label:'Enviado',reason:'Datos y fotos procesados según confirmaciones recibidas'};
+ if(st.sentData)return {code,kind:'photos',label:'Fotos pendientes',reason:(st.lastError||'Los datos fueron confirmados; falta completar fotografías')+detail};
+ if(st.deliveryState==='sending-unconfirmed')return {code,kind:'uncertain',label:'Por verificar',reason:(st.lastError||'No se recibió confirmación definitiva. Verificar en SQL antes de reenviar')+detail};
+ if(st.lastError)return {code,kind:'error',label:'Error de envío',reason:st.lastError+detail};
  return {code,kind:'pending',label:'Sin enviar',reason:'Toma guardada localmente, todavía sin confirmación del servidor'};
 }
 let syncReportRows=[];
@@ -269,7 +288,7 @@ function isExplicitServerRejection(message){
  return /(?:servidor rechaz[oó] toma|HTTP\s*200\s*:\s*ERROR|^ERROR\s*:|CODIGO\s+2026\s+DUPLICADO|NO\s+SE\s+INSERTO\s+NI\s+SE\s+ACTUALIZO)/i.test(m)&&!/Load failed|SIN CONFIRMACI[OÓ]N/i.test(m);
 }
 async function syncState(r){
- const st=await get('meta','delivery:'+r.id)||{id:'delivery:'+r.id,remoteId:r.remoteId||Math.floor(100000000+Math.random()*899999999),sentData:!!r.sentData,deliveryState:r.deliveryState||'',uploaded:[...(r.uploaded||[false,false,false])],status:r.status||'pending',attempts:r.attempts||0,lastError:r.lastError||''};
+ const st=await get('meta','delivery:'+r.id)||{id:'delivery:'+r.id,remoteId:r.remoteId||Math.floor(100000000+Math.random()*899999999),sentData:!!r.sentData,deliveryState:r.deliveryState||'',uploaded:[...(r.uploaded||[false,false,false])],status:r.status||'pending',attempts:r.attempts||0,lastError:r.lastError||'',lastDiagnostic:r.lastDiagnostic||null};
  // Correct historical classifications without touching the records or their Blob/File photos.
  if(!st.sentData&&st.deliveryState==='sending-unconfirmed'&&isExplicitServerRejection(st.lastError)){
   st.deliveryState='rejected';st.status='pending';await put('meta',st);
@@ -285,8 +304,8 @@ async function sendRecord(r,st){
   // This is a metadata-only write, not a rewrite of the photo-containing record.
   st.deliveryState='sending-unconfirmed';st.lastError='';await saveSyncState(st);
   let result;
-  try{result=await postToma(body)}catch(err){if(err.confirmedRejection){st.deliveryState='rejected';st.status='pending';st.lastError=err.message;await saveSyncState(st)}throw err}
-  st.sentData=true;st.deliveryState='confirmed';st.status='photos-pending';await saveSyncState(st);
+  try{result=await postToma(body)}catch(err){st.lastDiagnostic=err.diagnostic||null;if(err.confirmedRejection){st.deliveryState='rejected';st.status='pending';st.lastError=err.message;await saveSyncState(st)}throw err}
+  st.lastDiagnostic=result.diagnostic;st.sentData=true;st.deliveryState='confirmed';st.status='photos-pending';await saveSyncState(st);
  }
  for(let i=0;i<(r.photos||[]).length;i++){
   if(!r.photos[i]||st.uploaded[i])continue;
@@ -308,13 +327,13 @@ $('syncpending').onclick=async()=>{
   for(const r of records){const st=await syncState(r);if(st.status!=='synced')pending.push({r,st})}
   for(const {r,st} of pending){
    const code=String(r.data?.CodigoNuevo||r.data?.CodSbn||'Sin código');
-   if(!st.sentData&&st.deliveryState==='sending-unconfirmed'){omitted++;incidents.push('• '+code+' — ENVÍO INCIERTO: '+(st.lastError||'Verificar SQL antes de reintentar'));continue}
+   if(!st.sentData&&st.deliveryState==='sending-unconfirmed'){omitted++;incidents.push('• '+code+' — ENVÍO INCIERTO: '+(st.lastError||'Verificar SQL antes de reintentar')+'\n  '+(formatSyncDiagnostic(st.lastDiagnostic)||'Sin diagnóstico de red: intento anterior a la versión actual'));continue}
    processed++;
    try{await sendRecord(r,st);confirmed++}
    catch(e){
-    errors++;st.attempts=(st.attempts||0)+1;st.lastError=e.message;
+    errors++;st.attempts=(st.attempts||0)+1;st.lastError=e.message;if(e.diagnostic)st.lastDiagnostic=e.diagnostic;
     try{await saveSyncState(st)}catch(writeError){incidents.push('• '+code+' — No se pudo registrar diagnóstico: '+writeError.message)}
-    incidents.push('• '+code+' — '+e.message);
+    incidents.push('• '+code+' — '+e.message+'\n  '+(formatSyncDiagnostic(st.lastDiagnostic)||'Sin metadatos de conexión'));
    }
   }
   log('Tomas procesadas: '+processed+'\nGuardadas y confirmadas: '+confirmed+'\nPendientes por error: '+errors+'\nOmitidas: '+omitted+'\n\nDETALLE DE INCIDENCIAS\n\n'+(incidents.join('\n')||'Sin incidencias.')+'\n\nLas tomas sin confirmar permanecen pendientes para reintento.');
