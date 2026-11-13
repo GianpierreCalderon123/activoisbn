@@ -150,6 +150,17 @@ async function editRecord(id){
  show('record');
 }
 $('cancelEdit').onclick=()=>{editingRecordId=null;$('form').reset();$('recordMode').textContent='Nueva toma';show('home')};
+async function authorizeRetry(id){
+ const r=await get('records',id);if(!r)return alert('No se encontró la toma');
+ const st=await syncState(r);
+ if(st.sentData||st.status==='synced'||st.deliveryState!=='sending-unconfirmed')return alert('La toma no requiere desbloqueo.');
+ const code=r.data?.CodigoNuevo||'';
+ const approved=confirm('Toma '+code+': antes de reintentar debes verificar en SQL Server que NO exista esta toma. Si ya existe, cancelar para evitar duplicados. ¿Confirmas que verificaste que NO existe en SQL?');
+ if(!approved)return;
+ st.deliveryState='retry-authorized';st.lastError='Reintento autorizado manualmente tras verificación SQL';await saveSyncState(st);
+ await renderRecords();
+ alert('Reintento habilitado solo para '+code+'. Pulsa Sincronizar inventarios pendientes. Se conservará el mismo ID de envío y las fotografías.');
+}
 async function renderRecords(){
  const rows=await all('records');const states=new Map();for(const r of rows)states.set(r.id,await syncState(r));const pending=rows.filter(x=>states.get(x.id).status!=='synced').length;
  $('stats').textContent=`Total: ${rows.length} · Pendientes: ${pending} · Sincronizados: ${rows.length-pending}`;
@@ -158,6 +169,7 @@ async function renderRecords(){
   const div=document.createElement('div');div.className='item';
   const label=document.createElement('span');label.textContent=(r.data.CodigoNuevo||r.data.CodSbn||'Sin código')+' — '+(states.get(r.id).status==='synced'?'Sincronizado':states.get(r.id).sentData?'Fotos pendientes':'Pendiente');div.append(label);
   if(!states.get(r.id).sentData&&states.get(r.id).status!=='synced'&&states.get(r.id).deliveryState!=='sending-unconfirmed'){const btn=document.createElement('button');btn.type='button';btn.textContent='Editar';btn.onclick=()=>editRecord(r.id);div.append(btn)}
+  if(!states.get(r.id).sentData&&states.get(r.id).deliveryState==='sending-unconfirmed'){const retry=document.createElement('button');retry.type='button';retry.textContent='Verificar y habilitar reintento';retry.onclick=()=>authorizeRetry(r.id);div.append(retry)}
   $('records').append(div)
  }
  if(!rows.length)$('records').textContent='No hay registros locales';
