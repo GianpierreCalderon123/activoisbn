@@ -22,7 +22,7 @@ function api(method,data){return request(BASE+method,{method:'POST',headers:{'Co
 async function postToma(body){let resp;try{resp=await fetch(BASE+'InsUpdtTomaActivoIsnV2',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','Accept':'*/*'},body})}catch(e){throw Error('No se pudo conectar al guardar toma: '+e.message)}const text=await resp.text();const description=text.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0,350);if(!resp.ok)throw Error('Toma HTTP '+resp.status+': '+description);if(!text.trim())throw Error('Toma: respuesta vacía; verificar el registro en SQL Server antes de reintentar');let value;try{const data=JSON.parse(text);value=data?.d??data}catch{if(!/^\s*</.test(text))throw Error('Toma: respuesta inesperada: '+description);const xml=new DOMParser().parseFromString(text,'text/xml');if(xml.querySelector('parsererror'))throw Error('Toma: XML inválido: '+description);const root=xml.documentElement;if(!['string','boolean','int','long'].includes(root.localName))throw Error('Toma: respuesta XML no reconocida: '+description);value=root.textContent.trim()}if(typeof value==='string'){const clean=value.trim();if(/^(false|error|failed|fall[oó]|exception|incorrecto|rechazado)/i.test(clean))throw Error('Servidor rechazó toma: '+clean.slice(0,250));if(clean.startsWith('{')||clean.startsWith('[')){try{value=JSON.parse(clean)}catch{}}else if(!clean)throw Error('Toma: respuesta sin confirmación')}if(value===false||value===null||value?.Success===false||value?.Exito===false||value?.Error||value?.error)throw Error('Servidor rechazó toma: '+JSON.stringify(value));return value}
 
 function rowsOf(d){if(Array.isArray(d))return d;for(const key of ['Table','data','rows','Rows'])if(Array.isArray(d?.[key]))return d[key];throw Error('Formato de maestro no reconocido')}
-function show(view){document.querySelectorAll('.view').forEach(x=>x.hidden=x.id!==view);$('login').hidden=true;$('app').hidden=false;if(view==='home')renderRecords();if(view==='record')setTab('ident')}
+function show(view){document.querySelectorAll('.view').forEach(x=>x.hidden=x.id!==view);$('login').hidden=true;$('app').hidden=false;if(view==='home')renderRecords();if(view==='sync')refreshSyncReport();if(view==='record')setTab('ident')}
 function setTab(tab){document.querySelectorAll('[data-group]').forEach(el=>el.hidden=el.dataset.group!==tab);document.querySelectorAll('[data-tab]').forEach(el=>el.classList.toggle('active',el.dataset.tab===tab));document.querySelectorAll('[data-photo-group]').forEach(el=>el.hidden=tab!=='fotos');document.querySelectorAll('[data-state-group]').forEach(el=>el.hidden=tab!=='ident')}
 document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
 function online(){$('connection').textContent=navigator.onLine?'● Conectado':'● Sin conexión'}addEventListener('online',online);addEventListener('offline',online);online();
@@ -199,6 +199,54 @@ async function compressPhoto(file){
   return await new Promise((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(Error('No se pudo comprimir fotografía')),'image/jpeg',0.72));
 }
 // Store sync progress separately: Safari must never re-serialize old File/Blob photos.
+// Read-only sync dashboard: use the metadata store to avoid rewriting Safari File/Blob values.
+function syncDescription(r,st){
+ const code=String(r.data?.CodigoNuevo||r.data?.CodSbn||'Sin código');
+ if(st.status==='synced')return {code,kind:'synced',label:'Enviado',reason:'Datos y fotos procesados según confirmaciones recibidas'};
+ if(st.sentData)return {code,kind:'photos',label:'Fotos pendientes',reason:st.lastError||'Los datos fueron confirmados; falta completar fotografías'};
+ if(st.deliveryState==='sending-unconfirmed')return {code,kind:'uncertain',label:'Por verificar',reason:st.lastError||'No se recibió confirmación definitiva. Verificar en SQL antes de reenviar'};
+ if(st.lastError)return {code,kind:'error',label:'Error de envío',reason:st.lastError};
+ return {code,kind:'pending',label:'Sin enviar',reason:'Toma guardada localmente, todavía sin confirmación del servidor'};
+}
+let syncReportRows=[];
+function drawSyncReport(){
+ const counts={synced:0,error:0,uncertain:0,photos:0,pending:0};
+ for(const row of syncReportRows)counts[row.kind]++;
+ const totals=$('syncTotals');totals.replaceChildren();
+ for(const [kind,title] of [['synced','Enviadas'],['error','Con error'],['uncertain','Por verificar'],['photos','Fotos pendientes'],['pending','Sin enviar']]){
+  const box=document.createElement('div');box.className='sync-total '+kind;
+  const n=document.createElement('strong');n.textContent=counts[kind];
+  const label=document.createElement('span');label.textContent=title;box.append(n,label);totals.append(box);
+ }
+ const filter=$('syncStatusFilter').value,body=$('syncTableBody');body.replaceChildren();
+ const rows=syncReportRows.filter(row=>filter==='all'||row.kind===filter);
+ for(const item of rows){
+  const tr=document.createElement('tr');tr.className='sync-row-'+item.kind;
+  const code=document.createElement('td');code.textContent=item.code;
+  const state=document.createElement('td');const badge=document.createElement('span');badge.className='sync-state '+item.kind;badge.textContent=item.label;state.append(badge);
+  const reason=document.createElement('td');reason.className='sync-reason';reason.textContent=item.reason;
+  const attempts=document.createElement('td');attempts.textContent=String(item.attempts);tr.append(code,state,reason,attempts);body.append(tr);
+ }
+ if(!rows.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=4;td.textContent='No hay registros en esta categoría.';tr.append(td);body.append(tr)}
+ $('syncReportInfo').textContent='Total: '+syncReportRows.length+' tomas · Mostrando: '+rows.length+' · Actualizado: '+new Date().toLocaleString('es-PE');
+}
+async function refreshSyncReport(){
+ try{
+  const records=await all('records'),rows=[];
+  for(const r of records){const st=await syncState(r);rows.push({...syncDescription(r,st),attempts:st.attempts||0})}
+  const order={error:0,uncertain:1,photos:2,pending:3,synced:4};
+  syncReportRows=rows.sort((a,b)=>order[a.kind]-order[b.kind]||a.code.localeCompare(b.code));
+  drawSyncReport();
+ }catch(err){$('syncReportInfo').textContent='No se pudo leer el resumen: '+err.message}
+}
+$('syncStatusFilter').onchange=drawSyncReport;
+$('syncRefresh').onclick=refreshSyncReport;
+$('syncExportReport').onclick=()=>{
+ const values=[['CodigoNuevo','Estado','Motivo','Intentos'],...syncReportRows.map(r=>[r.code,r.label,r.reason,r.attempts])];
+ const csv=values.map(row=>row.map(v=>{let t=String(v??'');if(/^[=+@-]/.test(t))t="'"+t;return '"'+t.replace(/"/g,'""')+'"'}).join(';')).join('\\r\\n');
+ const blob=new Blob(['\\uFEFF'+csv],{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+ a.href=url;a.download='InventarioFW_Diagnostico_'+new Date().toISOString().slice(0,10)+'.csv';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+};
 async function syncState(r){return await get('meta','delivery:'+r.id)||{id:'delivery:'+r.id,remoteId:r.remoteId||Math.floor(100000000+Math.random()*899999999),sentData:!!r.sentData,deliveryState:r.deliveryState||'',uploaded:[...(r.uploaded||[false,false,false])],status:r.status||'pending',attempts:r.attempts||0,lastError:r.lastError||''}}
 async function saveSyncState(st){await put('meta',st)}
 async function sendRecord(r,st){
@@ -238,7 +286,7 @@ $('syncpending').onclick=async()=>{
   }
   log(`Finalizado: ${ok} completos, ${failed} errores, ${uncertain} inciertos sin reenviar.`);
   await renderRecords();
- }catch(e){log('ERROR GENERAL: '+e.message)}finally{busy=false;$('syncpending').disabled=false}
+ }catch(e){log('ERROR GENERAL: '+e.message)}finally{busy=false;$('syncpending').disabled=false;await refreshSyncReport()}
 };
 // Actualización independiente: solo código nuevo y fotos, sin enviar una nueva toma.
 async function sendPhotoSet(job){
