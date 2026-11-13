@@ -238,7 +238,7 @@ function formatSyncDiagnostic(d){
 function syncDescription(r,st){
  const code=String(r.data?.CodigoNuevo||r.data?.CodSbn||'Sin código');
  const detail=st.lastDiagnostic?' | '+formatSyncDiagnostic(st.lastDiagnostic):'';
- if(st.status='synced')return {code,kind:'synced',label:'Enviado',reason:'Datos y fotos procesados según confirmaciones recibidas'};
+ if(st.status==='synced')return {code,kind:'synced',label:'Enviado',reason:'Datos y fotos procesados según confirmaciones recibidas'};
  if(st.sentData)return {code,kind:'photos',label:'Fotos pendientes',reason:(st.lastError||'Los datos fueron confirmados; falta completar fotografías')+detail};
  if(st.deliveryState==='sending-unconfirmed')return {code,kind:'uncertain',label:'Por verificar',reason:(st.lastError||'No se recibió confirmación definitiva. Verificar en SQL antes de reenviar')+detail};
  if(st.lastError)return {code,kind:'error',label:'Error de envío',reason:st.lastError+detail};
