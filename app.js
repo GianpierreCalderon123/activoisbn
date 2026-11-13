@@ -243,8 +243,8 @@ $('syncStatusFilter').onchange=drawSyncReport;
 $('syncRefresh').onclick=refreshSyncReport;
 $('syncExportReport').onclick=()=>{
  const values=[['CodigoNuevo','Estado','Motivo','Intentos'],...syncReportRows.map(r=>[r.code,r.label,r.reason,r.attempts])];
- const csv=values.map(row=>row.map(v=>{let t=String(v??'');if(/^[=+@-]/.test(t))t="'"+t;return '"'+t.replace(/"/g,'""')+'"'}).join(';')).join('\\r\\n');
- const blob=new Blob(['\\uFEFF'+csv],{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+ const csv=values.map(row=>row.map(v=>{let t=String(v??'');if(/^[=+@-]/.test(t))t="'"+t;return '"'+t.replace(/"/g,'""')+'"'}).join(';')).join('\r\n');
+ const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');
  a.href=url;a.download='InventarioFW_Diagnostico_'+new Date().toISOString().slice(0,10)+'.csv';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
 };
 async function syncState(r){return await get('meta','delivery:'+r.id)||{id:'delivery:'+r.id,remoteId:r.remoteId||Math.floor(100000000+Math.random()*899999999),sentData:!!r.sentData,deliveryState:r.deliveryState||'',uploaded:[...(r.uploaded||[false,false,false])],status:r.status||'pending',attempts:r.attempts||0,lastError:r.lastError||''}}
