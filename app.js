@@ -356,7 +356,17 @@ async function sendPhotoSet(job){
  }
  return job.uploaded;
 }
-$('imageCorrectionForm').onsubmit=async e=>{e.preventDefault();const code=$('correctionCode').value.trim();const photos=['correctionPhoto','correctionQr','correctionSerie'].map(id=>$(id).files[0]||null);if(!code)return alert('Ingrese el código nuevo');if(!photos.some(Boolean))return alert('Seleccione al menos una fotografía');const item={id:crypto.randomUUID(),code,photos,uploaded:[false,false,false],createdAt:new Date().toISOString(),status:'pending'};try{await put('imageCorrections',item);alert('Fotografías guardadas para envío.');e.target.reset()}catch(err){alert('No se pudieron guardar: '+err.message)}};
+for(const id of ['correctionPhoto','correctionQr','correctionSerie']){
+ for(const suffix of ['Camera','']){
+  const input=$(id+suffix);
+  input.addEventListener('change',()=>{
+   if(!input.files?.length)return;
+   $(id+(suffix?'':'Camera')).value='';
+   $(id+'Selected').textContent='✓ Fotografía lista: '+input.files[0].name;
+  });
+ }
+}
+$('imageCorrectionForm').onsubmit=async e=>{e.preventDefault();const code=$('correctionCode').value.trim();const photos=['correctionPhoto','correctionQr','correctionSerie'].map(id=>$(id+'Camera').files[0]||$(id).files[0]||null);if(!code)return alert('Ingrese el código nuevo');if(!photos.some(Boolean))return alert('Seleccione al menos una fotografía');const item={id:crypto.randomUUID(),code,photos,uploaded:[false,false,false],createdAt:new Date().toISOString(),status:'pending'};try{await put('imageCorrections',item);alert('Fotografías guardadas para envío.');e.target.reset();for(const id of ['correctionPhoto','correctionQr','correctionSerie'])$(id+'Selected').textContent='Sin fotografía seleccionada'}catch(err){alert('No se pudieron guardar: '+err.message)}};
 $('sendCorrections').onclick=async()=>{if(busy)return;if(!navigator.onLine)return alert('Se necesita conexión para enviar imágenes');busy=true;$('sendCorrections').disabled=true;$('correctionLog').textContent='';try{const jobs=(await all('imageCorrections')).filter(x=>x.status!=='synced');for(const job of jobs){try{await sendPhotoSet(job);job.status='synced';job.photos=[null,null,null];await put('imageCorrections',job);$('correctionLog').textContent+='OK: '+job.code+'\\n'}catch(err){job.lastError=err.message;await put('imageCorrections',job);$('correctionLog').textContent+='ERROR '+job.code+': '+err.message+'\\n'}}}finally{busy=false;$('sendCorrections').disabled=false}};
 // Export is read-only: never mutates IndexedDB or attempts a network upload.
 async function exportTomas(){
