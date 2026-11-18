@@ -10,7 +10,14 @@ const FIELD_GROUPS={
 const FIELDS=[...FIELD_GROUPS.ident,...FIELD_GROUPS.ubic];
 const PICKER_FIELDS=['UbicacionCodigo','UsuarioAsignadoNombre','Locador'];
 const pickers={UbicacionCodigo:{store:'ubicaciones',keys:['Codigo','Descripcion'],caption:'Ubicación'},UsuarioAsignadoNombre:{store:'usuarios',keys:['CodigoUsuario','NombreCompleto'],caption:'Usuario asignado'},Locador:{store:'locadores',keys:['CodigoLocador','NombreCompleto'],caption:'Locador'}};
-$('fields').innerHTML=Object.entries(FIELD_GROUPS).map(([group,items])=>`<div class="field-group" data-group="${group}">${items.map(([key,label])=>`<label>${label}<input name="${key}" autocomplete="off"></label>`).join('')}</div>`).join('');
+$('fields').innerHTML=Object.entries(FIELD_GROUPS).map(([group,items])=>`<div class="field-group" data-group="${group}">${items.map(([key,label])=>`<label>${label}<input name="${key}" autocomplete="off">${['Marca','Modelo','Serie'].includes(key)?`<span class="missing-field-actions"><button type="button" data-missing="${key}" data-value="${key==='Modelo'?'S/Modelo':key==='Marca'?'S/M':'S/S'}">${key==='Modelo'?'S/Modelo':key==='Marca'?'S/M':'S/S'}</button><button type="button" data-missing="${key}" data-value="Inaccesible">Inaccesible</button><button type="button" data-missing="${key}" data-value="Ilegible">Ilegible</button></span>`:''}</label>`).join('')}</div>`).join('');
+// Shortcuts used by Android inventory operators; never overwrite without an explicit tap.
+$('fields').addEventListener('click',event=>{
+ const button=event.target.closest('button[data-missing]');if(!button)return;
+ const field=$('form').elements.namedItem(button.dataset.missing);if(!field)return;
+ field.value=button.dataset.value;field.dispatchEvent(new Event('input',{bubbles:true}));
+ field.focus();
+});
 function openDB(){return new Promise((resolve,reject)=>{const r=indexedDB.open('inventariofw-pwa',4);r.onupgradeneeded=()=>{for(const name of ['masters','records','session','meta','imageCorrections'])if(!r.result.objectStoreNames.contains(name))r.result.createObjectStore(name,{keyPath:'id'})};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
 async function transact(store,mode,fn){const db=await openDB();return new Promise((ok,no)=>{const tx=db.transaction(store,mode),req=fn(tx.objectStore(store));let result; if(req){req.onsuccess=()=>{result=req.result};req.onerror=()=>no(req.error)}tx.oncomplete=()=>{db.close();ok(result)};tx.onerror=()=>{db.close();no(tx.error)}})}
 const put=(store,item)=>transact(store,'readwrite',s=>s.put(item));
