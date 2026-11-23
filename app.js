@@ -303,6 +303,14 @@ async function syncState(r){
  return st;
 }
 async function saveSyncState(st){await put('meta',st)}
+async function uploadPendingImage(blob,id){
+ const response=await fetch(CFG.imageUpload,{method:'POST',headers:{'Content-Type':blob.type||'image/jpeg','X-Inventory-Image-Id':id},body:blob,cache:'no-store'});
+ const reply=await response.text();
+ if(!response.ok||/^\s*(?:ERROR\b|FALSE\b)/i.test(reply)){
+  throw Error('HTTP '+response.status+': '+(reply||'Sin respuesta').slice(0,350));
+ }
+ return reply;
+}
 async function sendRecord(r,st){
  if(!st.sentData){
   const body=new URLSearchParams();
@@ -317,9 +325,7 @@ async function sendRecord(r,st){
  for(let i=0;i<(r.photos||[]).length;i++){
   if(!r.photos[i]||st.uploaded[i])continue;
   const code=r.data.CodigoNuevo,blob=await compressPhoto(r.photos[i]);
-  const form=new FormData();form.append('file',blob,`${code}_${i+1}.jpg`);form.append('id',`${code}_${i+1}`);
-  const response=await fetch(CFG.imageUpload,{method:'POST',body:form});
-  if(!response.ok)throw Error('Imagen '+(i+1)+': HTTP '+response.status+' '+(await response.text()).slice(0,250));
+  await uploadPendingImage(blob,`${code}_${i+1}`);
   st.uploaded[i]=true;await saveSyncState(st);
   // Keep legacy photo blobs untouched: clearing them requires rewriting old File objects.
  }
@@ -364,12 +370,7 @@ $('syncimages').onclick=async()=>{
     for(let i=0;i<(r.photos||[]).length;i++){
      if(!r.photos[i]||st.uploaded[i])continue;
      const blob=await compressPhoto(r.photos[i]);
-     const form=new FormData();
-     form.append('file',blob,code+'_'+(i+1)+'.jpg');
-     form.append('id',code+'_'+(i+1));
-     const response=await fetch(CFG.imageUpload,{method:'POST',body:form});
-     const reply=await response.text();
-     if(!response.ok||/^(?:\s*ERROR\b|\s*FALSE\b)/i.test(reply))throw Error('Foto '+(i+1)+': HTTP '+response.status+' '+reply.slice(0,300));
+     await uploadPendingImage(blob,code+'_'+(i+1));
      st.uploaded[i]=true;await saveSyncState(st);
     }
     st.status='synced';st.lastError='';await saveSyncState(st);confirmed++;
@@ -391,11 +392,7 @@ async function sendPhotoSet(job){
  for(let i=0;i<job.photos.length;i++){
   if(!job.photos[i]||job.uploaded[i])continue;
   const blob=await compressPhoto(job.photos[i]);
-  const form=new FormData();
-  form.append('file',blob,job.code+'_'+(i+1)+'.jpg');
-  form.append('id',job.code+'_'+(i+1));
-  const response=await fetch(CFG.imageUpload,{method:'POST',body:form});
-  if(!response.ok)throw Error('Imagen '+(i+1)+': HTTP '+response.status+' '+(await response.text()).slice(0,250));
+  await uploadPendingImage(blob,job.code+'_'+(i+1));
   // Free only the successfully uploaded photo; persist after each confirmation.
   job.uploaded[i]=true;
   job.photos[i]=null;
