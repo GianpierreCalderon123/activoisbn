@@ -356,16 +356,23 @@ $('syncpending').onclick=async()=>{
 $('syncimages').onclick=async()=>{
  if(busy)return;
  if(!navigator.onLine)return alert('Se necesita conexión para sincronizar imágenes.');
- busy=true;$('syncimages').disabled=true;$('log').textContent='';
+ busy=true;$('syncimages').disabled=true;$('log').textContent='Preparando fotografías pendientes…\n';
+ const updateProgress=(message)=>{$('log').textContent=message+'\n';};
+ const yieldUI=()=>new Promise(resolve=>setTimeout(resolve,0));
  let processed=0,confirmed=0,failed=0,omitted=0;const incidents=[];
  try{
+  await yieldUI();
   const records=await all('records');
+  updateProgress('Revisando '+records.length+' tomas locales…');await yieldUI();
+  let scanned=0;
   for(const r of records){
    const st=await syncState(r),code=String(r.data?.CodigoNuevo||'Sin código');
+   scanned++;if(scanned%20===0){updateProgress('Revisadas: '+scanned+'/'+records.length+' · Fotos enviadas: '+confirmed+' · Errores: '+failed);await yieldUI()}
    if(!st.sentData){omitted++;continue}
    const pending=(r.photos||[]).some((photo,i)=>photo&&!st.uploaded[i]);
    if(!pending)continue;
    processed++;
+   updateProgress('Enviando fotografías de '+code+' ('+processed+' grupos)…');await yieldUI();
    try{
     for(let i=0;i<(r.photos||[]).length;i++){
      if(!r.photos[i]||st.uploaded[i])continue;
@@ -380,12 +387,13 @@ $('syncimages').onclick=async()=>{
   for(const job of corrections){
    if(!job.photos?.some((photo,i)=>photo&&!job.uploaded?.[i]))continue;
    processed++;
+   updateProgress('Enviando actualización de imágenes: '+job.code+'…');await yieldUI();
    try{await sendPhotoSet(job);job.status='synced';job.photos=[null,null,null];await put('imageCorrections',job);confirmed++}
    catch(e){failed++;job.lastError=e.message;await put('imageCorrections',job);incidents.push('• '+job.code+' — '+e.message)}
   }
   log('Imágenes: grupos procesados: '+processed+'\nCompletados: '+confirmed+'\nCon error: '+failed+'\nTomas sin datos confirmados (no se enviaron fotos): '+omitted+'\n\nDETALLE DE INCIDENCIAS\n'+(incidents.join('\n')||'Sin incidencias.')+'\n\nLas fotografías sin confirmar permanecen guardadas en este iPhone.');
  }catch(e){log('ERROR GENERAL: '+e.message)}
- finally{busy=false;$('syncimages').disabled=false;await refreshSyncReport();await renderRecords()}
+ finally{busy=false;$('syncimages').disabled=false;/* Keep the final result visible. Large IndexedDB reads are refreshed only on demand. */}
 };
 // Actualización independiente: solo código nuevo y fotos, sin enviar una nueva toma.
 async function sendPhotoSet(job){
