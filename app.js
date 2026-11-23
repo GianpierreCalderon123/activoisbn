@@ -369,7 +369,7 @@ $('syncimages').onclick=async()=>{
      form.append('id',code+'_'+(i+1));
      const response=await fetch(CFG.imageUpload,{method:'POST',body:form});
      const reply=await response.text();
-     if(!response.ok||/^(?:\\s*ERROR\\b|\\s*FALSE\\b)/i.test(reply))throw Error('Foto '+(i+1)+': HTTP '+response.status+' '+reply.slice(0,300));
+     if(!response.ok||/^(?:\s*ERROR\b|\s*FALSE\b)/i.test(reply))throw Error('Foto '+(i+1)+': HTTP '+response.status+' '+reply.slice(0,300));
      st.uploaded[i]=true;await saveSyncState(st);
     }
     st.status='synced';st.lastError='';await saveSyncState(st);confirmed++;
@@ -382,7 +382,7 @@ $('syncimages').onclick=async()=>{
    try{await sendPhotoSet(job);job.status='synced';job.photos=[null,null,null];await put('imageCorrections',job);confirmed++}
    catch(e){failed++;job.lastError=e.message;await put('imageCorrections',job);incidents.push('• '+job.code+' — '+e.message)}
   }
-  log('Imágenes: grupos procesados: '+processed+'\\nCompletados: '+confirmed+'\\nCon error: '+failed+'\\nTomas sin datos confirmados (no se enviaron fotos): '+omitted+'\\n\\nDETALLE DE INCIDENCIAS\\n'+(incidents.join('\\n')||'Sin incidencias.')+'\\n\\nLas fotografías sin confirmar permanecen guardadas en este iPhone.');
+  log('Imágenes: grupos procesados: '+processed+'\nCompletados: '+confirmed+'\nCon error: '+failed+'\nTomas sin datos confirmados (no se enviaron fotos): '+omitted+'\n\nDETALLE DE INCIDENCIAS\n'+(incidents.join('\n')||'Sin incidencias.')+'\n\nLas fotografías sin confirmar permanecen guardadas en este iPhone.');
  }catch(e){log('ERROR GENERAL: '+e.message)}
  finally{busy=false;$('syncimages').disabled=false;await refreshSyncReport();await renderRecords()}
 };
