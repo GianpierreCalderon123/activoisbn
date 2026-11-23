@@ -346,6 +346,46 @@ $('syncpending').onclick=async()=>{
   await renderRecords();
  }catch(e){log('ERROR GENERAL: '+e.message)}finally{busy=false;$('syncpending').disabled=false;await refreshSyncReport()}
 };
+// Dedicated image retry: never submits inventory data again.
+$('syncimages').onclick=async()=>{
+ if(busy)return;
+ if(!navigator.onLine)return alert('Se necesita conexión para sincronizar imágenes.');
+ busy=true;$('syncimages').disabled=true;$('log').textContent='';
+ let processed=0,confirmed=0,failed=0,omitted=0;const incidents=[];
+ try{
+  const records=await all('records');
+  for(const r of records){
+   const st=await syncState(r),code=String(r.data?.CodigoNuevo||'Sin código');
+   if(!st.sentData){omitted++;continue}
+   const pending=(r.photos||[]).some((photo,i)=>photo&&!st.uploaded[i]);
+   if(!pending)continue;
+   processed++;
+   try{
+    for(let i=0;i<(r.photos||[]).length;i++){
+     if(!r.photos[i]||st.uploaded[i])continue;
+     const blob=await compressPhoto(r.photos[i]);
+     const form=new FormData();
+     form.append('file',blob,code+'_'+(i+1)+'.jpg');
+     form.append('id',code+'_'+(i+1));
+     const response=await fetch(CFG.imageUpload,{method:'POST',body:form});
+     const reply=await response.text();
+     if(!response.ok||/^(?:\\s*ERROR\\b|\\s*FALSE\\b)/i.test(reply))throw Error('Foto '+(i+1)+': HTTP '+response.status+' '+reply.slice(0,300));
+     st.uploaded[i]=true;await saveSyncState(st);
+    }
+    st.status='synced';st.lastError='';await saveSyncState(st);confirmed++;
+   }catch(e){failed++;st.status='photos-pending';st.lastError=e.message;await saveSyncState(st);incidents.push('• '+code+' — '+e.message)}
+  }
+  const corrections=(await all('imageCorrections')).filter(x=>x.status!=='synced');
+  for(const job of corrections){
+   if(!job.photos?.some((photo,i)=>photo&&!job.uploaded?.[i]))continue;
+   processed++;
+   try{await sendPhotoSet(job);job.status='synced';job.photos=[null,null,null];await put('imageCorrections',job);confirmed++}
+   catch(e){failed++;job.lastError=e.message;await put('imageCorrections',job);incidents.push('• '+job.code+' — '+e.message)}
+  }
+  log('Imágenes: grupos procesados: '+processed+'\\nCompletados: '+confirmed+'\\nCon error: '+failed+'\\nTomas sin datos confirmados (no se enviaron fotos): '+omitted+'\\n\\nDETALLE DE INCIDENCIAS\\n'+(incidents.join('\\n')||'Sin incidencias.')+'\\n\\nLas fotografías sin confirmar permanecen guardadas en este iPhone.');
+ }catch(e){log('ERROR GENERAL: '+e.message)}
+ finally{busy=false;$('syncimages').disabled=false;await refreshSyncReport();await renderRecords()}
+};
 // Actualización independiente: solo código nuevo y fotos, sin enviar una nueva toma.
 async function sendPhotoSet(job){
  for(let i=0;i<job.photos.length;i++){
