@@ -226,6 +226,27 @@ function setupMasterSelectors(){
  $('form').elements.namedItem('UbicacionCodigo').addEventListener('change',async e=>{const rows=(await get('masters','ubicaciones'))?.rows||[];const match=rows.find(r=>String(r.Codigo||'').trim()===e.target.value.trim());if(!match)return;const f=$('form').elements;for(const [key,val] of Object.entries({UbicacionDescripcion:match.Descripcion,CoordinacionArea:match.CoordinacionArea,SubunidadServicio:match.SubunidadServicio,UnidadOrganica:match.UnidadOrganica}))f.namedItem(key).value=val??''});
 }
 setupMasterSelectors();
+function setupAssetCatalog(){
+ const input=$('form').elements.namedItem('DescripcionActivo');
+ if(!input)return;
+ const btn=document.createElement('button');btn.type='button';btn.className='picker-button';btn.textContent='🔍 Buscar en catálogo de bienes';input.after(btn);
+ const normalize=v=>String(v??'').trim().replace(/\s+/g,' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('es');
+ btn.onclick=async()=>{
+  try{
+   const rows=(await get('masters','activos'))?.rows||[];
+   const unique=new Map();
+   for(const row of rows){const desc=[row.DescripcionActivo,row.Descripcion,row.descripcion].map(v=>String(v??'').trim()).find(Boolean);if(desc&&!unique.has(normalize(desc)))unique.set(normalize(desc),desc)}
+   const catalog=[...unique.values()].sort((a,b)=>a.localeCompare(b,'es'));
+   if(!catalog.length)return alert('Catálogo vacío. Sincronice maestros primero.');
+   const modal=$('masterPicker'),search=$('pickerSearch'),list=$('pickerResults');
+   $('pickerTitle').textContent='Catálogo de bienes ('+catalog.length+')';modal.hidden=false;search.value='';
+   function paint(){const q=normalize(search.value);list.replaceChildren();const matches=catalog.filter(v=>normalize(v).includes(q));for(const desc of matches.slice(0,75)){const item=document.createElement('button');item.type='button';item.className='picker-result';item.textContent=desc;item.onclick=()=>{input.value=desc;input.dispatchEvent(new Event('input',{bubbles:true}));modal.hidden=true};list.append(item)}if(!matches.length)list.textContent='Sin coincidencias';else if(matches.length>75){const hint=document.createElement('p');hint.textContent='Mostrando 75 de '+matches.length+'. Escriba para filtrar.';list.append(hint)}}
+   search.oninput=paint;paint();search.focus();
+  }catch(e){alert('No se pudo abrir el catálogo: '+e.message)}
+ };
+}
+setupAssetCatalog();
+
 
 const SEND_FIELDS=['CodSbn','Cod2020','CodigoNuevo','Piso','Servicio','Ambiente','ObsAmbiente','DescripcionActivo','DescripcionAdicional','EstadoActivo','Sit','EsTercero','TipoActivo','TipoEquipo','AnioFabricacion','Serie','Color','Modelo','Material','Marca','Largo','Ancho','Alto','FechaVencimiento','Ubicacion','Item','Cantidad','Usuario','Id','Dia','Hora','Lote','UbicacionCodigo','UbicacionDescripcion','UsuarioAsignadoNombre','Locador','Cod2025','Cod2023','Observacion1','Observacion2','CoordinacionArea','SubunidadServicio','UnidadOrganica'];
 async function compressPhoto(file){
