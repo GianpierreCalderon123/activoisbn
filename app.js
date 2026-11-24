@@ -404,19 +404,33 @@ $('syncimages').onclick=async()=>{
     st.status='synced';st.lastError='';await saveSyncState(st);confirmed++;
    }catch(e){failed++;st.status='photos-pending';st.lastError=e.message;await saveSyncState(st);incidents.push('• '+code+' — '+e.message)}
   }
-  const corrections=(await all('imageCorrections')).filter(x=>x.status!=='synced');
+  const corrections=await pendingCorrections();
   for(const job of corrections){
    if(!job.photos?.some((photo,i)=>photo&&!job.uploaded?.[i]))continue;
    processed++;
    updateProgress('Enviando actualización de imágenes: '+job.code+'…');await yieldUI();
-   try{await sendPhotoSet(job);job.status='synced';await put('imageCorrections',job);confirmed++}
-   catch(e){failed++;job.lastError=e.message;await put('imageCorrections',job);incidents.push('• '+job.code+' — '+e.message)}
+   try{await sendPhotoSet(job);job.status='synced';job.lastError='';await saveCorrectionState(job);confirmed++}
+   catch(e){failed++;job.lastError=e.message;await saveCorrectionState(job);incidents.push('• '+job.code+' — '+e.message)}
   }
   log('Imágenes: grupos procesados: '+processed+'\nCompletados: '+confirmed+'\nCon error: '+failed+'\nTomas sin datos confirmados (no se enviaron fotos): '+omitted+'\n\nDETALLE DE INCIDENCIAS\n'+(incidents.join('\n')||'Sin incidencias.')+'\n\nLas fotografías sin confirmar permanecen guardadas en este iPhone.');
  }catch(e){log('ERROR GENERAL: '+e.message)}
  finally{busy=false;$('syncimages').disabled=false;/* Keep the final result visible. Large IndexedDB reads are refreshed only on demand. */}
 };
 // Actualización independiente: solo código nuevo y fotos, sin enviar una nueva toma.
+// Store correction acknowledgements separately from Safari File/Blob objects.
+async function correctionState(job){
+ const state=await get('meta','correction:'+job.id);
+ if(state){job.uploaded=state.uploaded;job.status=state.status;job.lastError=state.lastError}
+ return job;
+}
+async function saveCorrectionState(job){
+ await put('meta',{id:'correction:'+job.id,uploaded:[...job.uploaded],status:job.status,lastError:job.lastError||''});
+}
+async function pendingCorrections(){
+ const jobs=await all('imageCorrections');
+ for(const job of jobs)await correctionState(job);
+ return jobs.filter(job=>job.status!=='synced');
+}
 async function sendPhotoSet(job){
  for(let i=0;i<job.photos.length;i++){
   if(!job.photos[i]||job.uploaded[i])continue;
@@ -425,7 +439,7 @@ async function sendPhotoSet(job){
   // Free only the successfully uploaded photo; persist after each confirmation.
   job.uploaded[i]=true;
   // Retain local correction copy as a precaution.
-  await put('imageCorrections',job);
+  await saveCorrectionState(job);
  }
  return job.uploaded;
 }
@@ -445,7 +459,8 @@ async function saveCorrectionDraft(){
  const photos=correctionFields.map(id=>$(id+'Camera').files[0]||$(id).files[0]||null);
  if(!photos.some(Boolean))return null;
  if(!code)throw Error('Ingrese el código nuevo');
- const item={id:crypto.randomUUID(),code,photos,uploaded:[false,false,false],createdAt:new Date().toISOString(),status:'pending'};
+ const stablePhotos=await Promise.all(photos.map(async p=>p?new Blob([await p.arrayBuffer()],{type:p.type||'image/jpeg'}):null));
+ const item={id:crypto.randomUUID(),code,photos:stablePhotos,uploaded:[false,false,false],createdAt:new Date().toISOString(),status:'pending'};
  await put('imageCorrections',item);
  $('imageCorrectionForm').reset();
  for(const id of correctionFields)$(id+'Selected').textContent='Sin fotografía seleccionada';
@@ -476,7 +491,7 @@ $('sendCorrections').onclick=async()=>{
   $('correctionLog').textContent='Guardando imágenes seleccionadas…';
   await saveCorrectionDraft();
   if(!navigator.onLine)throw Error('Sin conexión. Las imágenes guardadas permanecen pendientes.');
-  const jobs=(await all('imageCorrections')).filter(x=>x.status!=='synced');
+  const jobs=await pendingCorrections();
   for(const job of jobs){
    for(let i=0;i<job.photos.length;i++){
     if(!job.photos[i]||job.uploaded[i])continue;
@@ -486,11 +501,11 @@ $('sendCorrections').onclick=async()=>{
      const blob=await compressPhoto(job.photos[i]);
      await uploadPendingImage(blob,job.code+'_'+(i+1));
      job.uploaded[i]=true;
-     try{await put('imageCorrections',job)}catch(e){job.uploaded[i]=false;throw e}
+     try{await saveCorrectionState(job)}catch(e){job.uploaded[i]=false;throw e}
      rows.push({name,ok:true});
-    }catch(e){rows.push({name,ok:false,error:e.message});job.lastError=e.message;await put('imageCorrections',job)}
+    }catch(e){rows.push({name,ok:false,error:e.message});job.lastError=e.message;await saveCorrectionState(job)}
    }
-   if(job.photos.every((p,i)=>!p||job.uploaded[i])){job.status='synced';await put('imageCorrections',job)}
+   if(job.photos.every((p,i)=>!p||job.uploaded[i])){job.status='synced';await saveCorrectionState(job)}
   }
  }catch(e){error=e.message}finally{busy=false;$('sendCorrections').disabled=false;showCorrectionResult(rows,error)}
 };
