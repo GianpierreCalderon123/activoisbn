@@ -324,13 +324,12 @@ async function syncState(r){
  return st;
 }
 async function saveSyncState(st){await put('meta',st)}
-async function uploadPendingImage(blob,id,verify=false){
- const response=await fetch(CFG.imageUpload,{method:'POST',headers:{'Content-Type':blob.type||'image/jpeg','X-Inventory-Image-Id':id,...(verify?{'X-Inventory-Verify':'1'}:{})},body:blob,cache:'no-store',signal:AbortSignal.timeout(55000)});
+async function uploadPendingImage(blob,id){
+ const response=await fetch(CFG.imageUpload,{method:'POST',headers:{'Content-Type':blob.type||'image/jpeg','X-Inventory-Image-Id':id},body:blob,cache:'no-store',signal:AbortSignal.timeout(55000)});
  const reply=await response.text();
- if(!response.ok||/^\s*(?:ERROR\b|FALSE\b)/i.test(reply)){
-  throw Error('HTTP '+response.status+': '+(reply||'Sin respuesta').slice(0,350));
- }
- if(verify){let result;try{result=JSON.parse(reply)}catch{}if(result?.verified!==true||result.id!==id)throw Error(id+': almacenamiento no confirmado');}
+ let result;try{result=JSON.parse(reply)}catch{}
+ const rejected=/^\s*(?:ERROR\b|FALSE\b)/i.test(reply)||result===false||result?.success===false||result?.Success===false||result?.exito===false||result?.Exito===false||Boolean(result?.error||result?.Error);
+ if(response.status!==200||rejected)throw Error(id+'.jpg — HTTP '+response.status+': '+(reply||'Sin respuesta').slice(0,350));
  return reply;
 }
 async function sendRecord(r,st){
@@ -422,10 +421,10 @@ async function sendPhotoSet(job){
  for(let i=0;i<job.photos.length;i++){
   if(!job.photos[i]||job.uploaded[i])continue;
   const blob=await compressPhoto(job.photos[i]);
-  await uploadPendingImage(blob,job.code+'_'+(i+1),true);
+  await uploadPendingImage(blob,job.code+'_'+(i+1));
   // Free only the successfully uploaded photo; persist after each confirmation.
   job.uploaded[i]=true;
-  // Retain correction copy until a later explicit cleanup; verified upload is recorded.
+  // Retain local correction copy as a precaution.
   await put('imageCorrections',job);
  }
  return job.uploaded;
