@@ -439,8 +439,61 @@ for(const id of ['correctionPhoto','correctionQr','correctionSerie']){
   });
  }
 }
-$('imageCorrectionForm').onsubmit=async e=>{e.preventDefault();const code=$('correctionCode').value.trim();const photos=['correctionPhoto','correctionQr','correctionSerie'].map(id=>$(id+'Camera').files[0]||$(id).files[0]||null);if(!code)return alert('Ingrese el código nuevo');if(!photos.some(Boolean))return alert('Seleccione al menos una fotografía');const item={id:crypto.randomUUID(),code,photos,uploaded:[false,false,false],createdAt:new Date().toISOString(),status:'pending'};try{await put('imageCorrections',item);alert('Fotografías guardadas para envío.');e.target.reset();for(const id of ['correctionPhoto','correctionQr','correctionSerie'])$(id+'Selected').textContent='Sin fotografía seleccionada'}catch(err){alert('No se pudieron guardar: '+err.message)}};
-$('sendCorrections').onclick=async()=>{if(busy)return;if(!navigator.onLine)return alert('Se necesita conexión para enviar imágenes');busy=true;$('sendCorrections').disabled=true;$('correctionLog').textContent='';try{const jobs=(await all('imageCorrections')).filter(x=>x.status!=='synced');for(const job of jobs){try{await sendPhotoSet(job);job.status='synced';await put('imageCorrections',job);$('correctionLog').textContent+='OK: '+job.code+'\\n'}catch(err){job.lastError=err.message;await put('imageCorrections',job);$('correctionLog').textContent+='ERROR '+job.code+': '+err.message+'\\n'}}}finally{busy=false;$('sendCorrections').disabled=false}};
+const correctionFields=['correctionPhoto','correctionQr','correctionSerie'];
+async function saveCorrectionDraft(){
+ const code=$('correctionCode').value.trim();
+ const photos=correctionFields.map(id=>$(id+'Camera').files[0]||$(id).files[0]||null);
+ if(!photos.some(Boolean))return null;
+ if(!code)throw Error('Ingrese el código nuevo');
+ const item={id:crypto.randomUUID(),code,photos,uploaded:[false,false,false],createdAt:new Date().toISOString(),status:'pending'};
+ await put('imageCorrections',item);
+ $('imageCorrectionForm').reset();
+ for(const id of correctionFields)$(id+'Selected').textContent='Sin fotografía seleccionada';
+ return item;
+}
+$('imageCorrectionForm').onsubmit=async e=>{
+ e.preventDefault();if(busy)return;busy=true;
+ try{const item=await saveCorrectionDraft();alert(item?'Fotografías guardadas para envío.':'Seleccione al menos una fotografía')}
+ catch(err){alert('No se pudieron guardar: '+err.message)}finally{busy=false}
+};
+const correctionResult=document.createElement('section');
+correctionResult.id='correctionResult';correctionResult.className='panel view';correctionResult.hidden=true;
+$('images').after(correctionResult);
+function showCorrectionResult(rows,error){
+ correctionResult.replaceChildren();
+ const failed=rows.filter(r=>!r.ok).length;
+ const h=document.createElement('h2');h.textContent=error||failed?'Envío con incidencias':rows.length?'✓ Imágenes enviadas correctamente':'No hay imágenes pendientes';correctionResult.append(h);
+ const p=document.createElement('p');p.textContent='Fotografías confirmadas: '+(rows.length-failed)+' de '+rows.length+' · Pendientes: '+failed;correctionResult.append(p);
+ if(error){const msg=document.createElement('p');msg.textContent=error;correctionResult.append(msg)}
+ for(const r of rows){const line=document.createElement('p');line.textContent=(r.ok?'✓ ':'✗ ')+r.name+' — '+(r.ok?'HTTP 200 confirmado':r.error);correctionResult.append(line)}
+ for(const [label,action] of [[failed||error?'Reintentar pendientes':'Actualizar otro activo',()=>{show('images');if(failed||error)$('sendCorrections').click()}],['Volver al menú principal',()=>show('home')]]){const btn=document.createElement('button');btn.type='button';btn.textContent=label;btn.onclick=action;correctionResult.append(btn)}
+ show('correctionResult');
+}
+$('sendCorrections').onclick=async()=>{
+ if(busy)return;busy=true;$('sendCorrections').disabled=true;
+ const rows=[];let error='';
+ try{
+  $('correctionLog').textContent='Guardando imágenes seleccionadas…';
+  await saveCorrectionDraft();
+  if(!navigator.onLine)throw Error('Sin conexión. Las imágenes guardadas permanecen pendientes.');
+  const jobs=(await all('imageCorrections')).filter(x=>x.status!=='synced');
+  for(const job of jobs){
+   for(let i=0;i<job.photos.length;i++){
+    if(!job.photos[i]||job.uploaded[i])continue;
+    const name=job.code+'_'+(i+1)+'.jpg';
+    $('correctionLog').textContent='Enviando '+name+'…';
+    try{
+     const blob=await compressPhoto(job.photos[i]);
+     await uploadPendingImage(blob,job.code+'_'+(i+1));
+     job.uploaded[i]=true;
+     try{await put('imageCorrections',job)}catch(e){job.uploaded[i]=false;throw e}
+     rows.push({name,ok:true});
+    }catch(e){rows.push({name,ok:false,error:e.message});job.lastError=e.message;await put('imageCorrections',job)}
+   }
+   if(job.photos.every((p,i)=>!p||job.uploaded[i])){job.status='synced';await put('imageCorrections',job)}
+  }
+ }catch(e){error=e.message}finally{busy=false;$('sendCorrections').disabled=false;showCorrectionResult(rows,error)}
+};
 // Export is read-only: never mutates IndexedDB or attempts a network upload.
 async function exportTomas(){
  const button=$('exportTomas');button.disabled=true;
