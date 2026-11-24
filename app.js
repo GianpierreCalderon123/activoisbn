@@ -324,12 +324,13 @@ async function syncState(r){
  return st;
 }
 async function saveSyncState(st){await put('meta',st)}
-async function uploadPendingImage(blob,id){
- const response=await fetch(CFG.imageUpload,{method:'POST',headers:{'Content-Type':blob.type||'image/jpeg','X-Inventory-Image-Id':id},body:blob,cache:'no-store'});
+async function uploadPendingImage(blob,id,verify=false){
+ const response=await fetch(CFG.imageUpload,{method:'POST',headers:{'Content-Type':blob.type||'image/jpeg','X-Inventory-Image-Id':id,...(verify?{'X-Inventory-Verify':'1'}:{})},body:blob,cache:'no-store',signal:AbortSignal.timeout(55000)});
  const reply=await response.text();
  if(!response.ok||/^\s*(?:ERROR\b|FALSE\b)/i.test(reply)){
   throw Error('HTTP '+response.status+': '+(reply||'Sin respuesta').slice(0,350));
  }
+ if(verify){let result;try{result=JSON.parse(reply)}catch{}if(result?.verified!==true||result.id!==id)throw Error(id+': almacenamiento no confirmado');}
  return reply;
 }
 async function sendRecord(r,st){
@@ -409,7 +410,7 @@ $('syncimages').onclick=async()=>{
    if(!job.photos?.some((photo,i)=>photo&&!job.uploaded?.[i]))continue;
    processed++;
    updateProgress('Enviando actualización de imágenes: '+job.code+'…');await yieldUI();
-   try{await sendPhotoSet(job);job.status='synced';job.photos=[null,null,null];await put('imageCorrections',job);confirmed++}
+   try{await sendPhotoSet(job);job.status='synced';await put('imageCorrections',job);confirmed++}
    catch(e){failed++;job.lastError=e.message;await put('imageCorrections',job);incidents.push('• '+job.code+' — '+e.message)}
   }
   log('Imágenes: grupos procesados: '+processed+'\nCompletados: '+confirmed+'\nCon error: '+failed+'\nTomas sin datos confirmados (no se enviaron fotos): '+omitted+'\n\nDETALLE DE INCIDENCIAS\n'+(incidents.join('\n')||'Sin incidencias.')+'\n\nLas fotografías sin confirmar permanecen guardadas en este iPhone.');
@@ -421,10 +422,10 @@ async function sendPhotoSet(job){
  for(let i=0;i<job.photos.length;i++){
   if(!job.photos[i]||job.uploaded[i])continue;
   const blob=await compressPhoto(job.photos[i]);
-  await uploadPendingImage(blob,job.code+'_'+(i+1));
+  await uploadPendingImage(blob,job.code+'_'+(i+1),true);
   // Free only the successfully uploaded photo; persist after each confirmation.
   job.uploaded[i]=true;
-  job.photos[i]=null;
+  // Retain correction copy until a later explicit cleanup; verified upload is recorded.
   await put('imageCorrections',job);
  }
  return job.uploaded;
@@ -440,7 +441,7 @@ for(const id of ['correctionPhoto','correctionQr','correctionSerie']){
  }
 }
 $('imageCorrectionForm').onsubmit=async e=>{e.preventDefault();const code=$('correctionCode').value.trim();const photos=['correctionPhoto','correctionQr','correctionSerie'].map(id=>$(id+'Camera').files[0]||$(id).files[0]||null);if(!code)return alert('Ingrese el código nuevo');if(!photos.some(Boolean))return alert('Seleccione al menos una fotografía');const item={id:crypto.randomUUID(),code,photos,uploaded:[false,false,false],createdAt:new Date().toISOString(),status:'pending'};try{await put('imageCorrections',item);alert('Fotografías guardadas para envío.');e.target.reset();for(const id of ['correctionPhoto','correctionQr','correctionSerie'])$(id+'Selected').textContent='Sin fotografía seleccionada'}catch(err){alert('No se pudieron guardar: '+err.message)}};
-$('sendCorrections').onclick=async()=>{if(busy)return;if(!navigator.onLine)return alert('Se necesita conexión para enviar imágenes');busy=true;$('sendCorrections').disabled=true;$('correctionLog').textContent='';try{const jobs=(await all('imageCorrections')).filter(x=>x.status!=='synced');for(const job of jobs){try{await sendPhotoSet(job);job.status='synced';job.photos=[null,null,null];await put('imageCorrections',job);$('correctionLog').textContent+='OK: '+job.code+'\\n'}catch(err){job.lastError=err.message;await put('imageCorrections',job);$('correctionLog').textContent+='ERROR '+job.code+': '+err.message+'\\n'}}}finally{busy=false;$('sendCorrections').disabled=false}};
+$('sendCorrections').onclick=async()=>{if(busy)return;if(!navigator.onLine)return alert('Se necesita conexión para enviar imágenes');busy=true;$('sendCorrections').disabled=true;$('correctionLog').textContent='';try{const jobs=(await all('imageCorrections')).filter(x=>x.status!=='synced');for(const job of jobs){try{await sendPhotoSet(job);job.status='synced';await put('imageCorrections',job);$('correctionLog').textContent+='OK: '+job.code+'\\n'}catch(err){job.lastError=err.message;await put('imageCorrections',job);$('correctionLog').textContent+='ERROR '+job.code+': '+err.message+'\\n'}}}finally{busy=false;$('sendCorrections').disabled=false}};
 // Export is read-only: never mutates IndexedDB or attempts a network upload.
 async function exportTomas(){
  const button=$('exportTomas');button.disabled=true;
