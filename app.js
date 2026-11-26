@@ -64,7 +64,20 @@ function show(view){document.querySelectorAll('.view').forEach(x=>x.hidden=x.id!
 function setTab(tab){document.querySelectorAll('[data-group]').forEach(el=>el.hidden=el.dataset.group!==tab);document.querySelectorAll('[data-tab]').forEach(el=>el.classList.toggle('active',el.dataset.tab===tab));document.querySelectorAll('[data-photo-group]').forEach(el=>el.hidden=tab!=='fotos');document.querySelectorAll('[data-state-group]').forEach(el=>el.hidden=tab!=='ident')}
 document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
 function online(){$('connection').textContent=navigator.onLine?'● Conectado':'● Sin conexión'}addEventListener('online',online);addEventListener('offline',online);online();
-document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{if(b.dataset.view==='record' && !editingRecordId){$('form').reset();$('recordMode').textContent='Nueva toma'}show(b.dataset.view)});
+const contextFields=FIELD_GROUPS.ubic.map(([key])=>key);
+const contextKey=()=> 'last-toma-context:'+currentUser.trim().toUpperCase();
+const requiredFields=['CodigoNuevo','DescripcionActivo','UbicacionCodigo','UsuarioAsignadoNombre','Marca','Modelo','Serie'];
+let editPhotos=[];
+const progress=document.createElement('p');progress.setAttribute('aria-live','polite');$('recordMode').after(progress);
+function updateTomaProgress(){
+ const f=$('form').elements;
+ const count=requiredFields.filter(k=>String(f.namedItem(k).value||'').trim()).length+['photo','qr'].filter((k,i)=>$(k).files.length||editPhotos[i]).length;
+ progress.textContent='Toma: '+Math.round(count/9*100)+'% ('+count+'/9 requisitos obligatorios)';
+ for(const k of requiredFields){const el=f.namedItem(k);el.style.borderColor=el.value.trim()?'#23834b':'#d97706';}
+}
+$('form').addEventListener('input',updateTomaProgress);$('form').addEventListener('change',updateTomaProgress);$('form').addEventListener('click',()=>queueMicrotask(updateTomaProgress));
+for(const k of requiredFields){const el=$('form').elements.namedItem(k);el.setAttribute('aria-required','true');el.closest('label').prepend(' * ');}
+document.querySelectorAll('[data-view]').forEach(b=>b.onclick=async()=>{if(b.dataset.view==='record'&&!editingRecordId){$('form').reset();editPhotos=[];$('recordMode').textContent='Nueva toma';try{const saved=await get('meta',contextKey());for(const k of contextFields)$('form').elements.namedItem(k).value=saved?.data?.[k]??''}catch(e){console.warn('Contexto no disponible',e)}}show(b.dataset.view);if(b.dataset.view==='record')updateTomaProgress()});
 $('logout').onclick=()=>{currentUser='';$('app').hidden=true;$('login').hidden=false;$('pass').value=''};
 function toHex(bytes){return [...new Uint8Array(bytes)].map(x=>x.toString(16).padStart(2,'0')).join('')}
 async function passwordKey(pw,salt){const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(pw),'PBKDF2',false,['deriveBits']);return toHex(await crypto.subtle.deriveBits({name:'PBKDF2',salt:new Uint8Array(salt),iterations:210000,hash:'SHA-256'},key,256))}
@@ -173,19 +186,20 @@ $('lookup').onclick=async()=>{
  // Android special-asset rule: only the listed patrimonial items receive series, brand and model.
  for(const key of ['Serie','Marca','Modelo'])form.namedItem(key).value='';
  if(special){form.namedItem('Serie').value=special.serie||SEARCH_FIELDS.Serie.map(k=>selected[k]).find(Boolean)||'';form.namedItem('Marca').value=special.marca||selected.Marca||'';form.namedItem('Modelo').value=special.modelo||selected.Modelo||''}
+ updateTomaProgress();
  // No modificar ubicación, usuario, locador ni fotografías.
 };
-$('form').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);const data=Object.fromEntries([...f.entries()].filter(([k])=>!['photo','qr','seriesphoto'].includes(k)));data.Usuario=currentUser;data.EstadoActivo=f.get('EstadoActivo');data.Sit=f.get('Sit')||'EN USO';data.EsTercero=f.has('EsTercero')?'true':'false';if(!data.CodigoNuevo?.trim()){setTab('ident');return alert('Código nuevo obligatorio')}if(!data.DescripcionActivo?.trim()){setTab('ident');return alert('Descripción del activo obligatoria')}if(!data.UbicacionCodigo?.trim()){setTab('ubic');return alert('Seleccione una ubicación')}if(!data.UsuarioAsignadoNombre?.trim()){setTab('ubic');return alert('Seleccione un usuario asignado')}if((!$('photo').files.length&&!((editingRecordId&&await get('records',editingRecordId))?.photos?.[0]))||(!$('qr').files.length&&!((editingRecordId&&await get('records',editingRecordId))?.photos?.[1]))){setTab('fotos');return alert('Foto del activo y foto del QR son obligatorias')}data.Ubicacion=data.UbicacionCodigo;if(data.CodSbn?.length&&data.CodSbn.length!==12&&!confirm('El código patrimonial no tiene 12 caracteres. ¿Guardar igualmente?'))return;const prior=editingRecordId?await get('records',editingRecordId):null;
+$('form').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);const data=Object.fromEntries([...f.entries()].filter(([k])=>!['photo','qr','seriesphoto'].includes(k)));data.Usuario=currentUser;data.EstadoActivo=f.get('EstadoActivo');data.Sit=f.get('Sit')||'EN USO';data.EsTercero=f.has('EsTercero')?'true':'false';for(const k of ['Marca','Modelo','Serie']){if(!data[k]?.trim()){setTab('ident');$('form').elements.namedItem(k).focus();return alert(k+' obligatorio')}}if(!data.CodigoNuevo?.trim()){setTab('ident');return alert('Código nuevo obligatorio')}if(!data.DescripcionActivo?.trim()){setTab('ident');return alert('Descripción del activo obligatoria')}if(!data.UbicacionCodigo?.trim()){setTab('ubic');return alert('Seleccione una ubicación')}if(!data.UsuarioAsignadoNombre?.trim()){setTab('ubic');return alert('Seleccione un usuario asignado')}if((!$('photo').files.length&&!((editingRecordId&&await get('records',editingRecordId))?.photos?.[0]))||(!$('qr').files.length&&!((editingRecordId&&await get('records',editingRecordId))?.photos?.[1]))){setTab('fotos');return alert('Foto del activo y foto del QR son obligatorias')}data.Ubicacion=data.UbicacionCodigo;if(data.CodSbn?.length&&data.CodSbn.length!==12&&!confirm('El código patrimonial no tiene 12 caracteres. ¿Guardar igualmente?'))return;const prior=editingRecordId?await get('records',editingRecordId):null;
 if(prior?.sentData)return alert('Esta toma ya se envió al servidor y no puede editarse localmente.');
 const item=prior||{id:crypto.randomUUID(),remoteId:Math.floor(100000000+Math.random()*899999999),status:'pending',createdAt:new Date().toISOString(),sentData:false,uploaded:[false,false,false],attempts:0};
-item.data=data;item.photos=['photo','qr','seriesphoto'].map((id,i)=>$(id).files[0]||prior?.photos?.[i]||null);try{await put('records',item);alert('Inventario y fotografías guardados localmente');e.target.reset();editingRecordId=null;$('recordMode').textContent='Nueva toma';selected=null;$('found').textContent='';show('home')}catch(err){alert('No se pudo guardar: '+err.message)}};
+item.data=data;item.photos=['photo','qr','seriesphoto'].map((id,i)=>$(id).files[0]||prior?.photos?.[i]||null);try{await put('records',item);try{await put('meta',{id:contextKey(),data:Object.fromEntries(contextFields.map(k=>[k,data[k]??'']))})}catch(e){console.warn('No se guardó contexto',e)}editPhotos=[];alert('Inventario y fotografías guardados localmente');e.target.reset();editingRecordId=null;$('recordMode').textContent='Nueva toma';selected=null;$('found').textContent='';show('home')}catch(err){alert('No se pudo guardar: '+err.message)}};
 async function editRecord(id){
  const r=await get('records',id);if(!r)return alert('No se encontró la toma');
  const state=await syncState(r);if(state.sentData||state.status==='synced'||state.deliveryState==='sending-unconfirmed')return alert('Esta toma ya fue enviada y no puede modificarse localmente.');
- editingRecordId=id;$('form').reset();
+ editingRecordId=id;editPhotos=r.photos||[];$('form').reset();
  for(const [key,val] of Object.entries(r.data||{})){const el=$('form').elements.namedItem(key);if(!el)continue;if(el.type==='checkbox')el.checked=val===true||val==='true';else el.value=val??''}
  $('recordMode').textContent='Editando toma '+(r.data.CodigoNuevo||'');$('found').textContent='Las fotografías guardadas se conservan; selecciona archivos solo si deseas reemplazarlas.';
- show('record');
+ show('record');updateTomaProgress();
 }
 $('cancelEdit').onclick=()=>{editingRecordId=null;$('form').reset();$('recordMode').textContent='Nueva toma';show('home')};
 async function authorizeRetry(id){
