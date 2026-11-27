@@ -214,8 +214,10 @@ async function authorizeRetry(id){
  alert('Reintento habilitado solo para '+code+'. Pulsa Sincronizar inventarios pendientes. Se conservará el mismo ID de envío y las fotografías.');
 }
 async function renderRecords(){
- const rows=await all('records');const states=new Map();for(const r of rows)states.set(r.id,await syncState(r));const pending=rows.filter(x=>states.get(x.id).status!=='synced').length;
- $('stats').textContent=`Total: ${rows.length} · Pendientes: ${pending} · Sincronizados: ${rows.length-pending}`;
+ const rows=await all('records');const states=new Map();for(const r of rows)states.set(r.id,await syncState(r));const codes=new Map();
+ for(const r of rows){const code=String(r.data?.CodigoNuevo??'').trim().toUpperCase();if(!code)continue;codes.set(code,Boolean(codes.get(code)||states.get(r.id).status!=='synced'))}
+ const pending=[...codes.values()].filter(Boolean).length;
+ $('stats').textContent=`Total: ${codes.size} · Pendientes: ${pending} · Sincronizados: ${codes.size-pending}`;
  $('records').replaceChildren();
  for(const r of rows.sort((a,b)=>b.createdAt.localeCompare(a.createdAt))){
   const div=document.createElement('div');div.className='item';
